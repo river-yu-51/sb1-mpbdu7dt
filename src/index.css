@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Apply Times New Roman as the global font for HTML and body */
+html,
+body,
+:host {
+  font-family: 'Times New Roman', serif; /* Global font changed */
+}
+
+/* CSS for dropdown transitions (from Header.tsx comment) */
+.dropdown-enter {
+  opacity: 0.5;
+  transform: scaleY(0.9);
+}
+.dropdown-enter-active {
+  opacity: 1;
+  transform: scaleY(1);
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
+  transform-origin: top;
+}
+.dropdown-exit {
+  opacity: 1;
+  transform: scaleY(1);
+}
+.dropdown-exit-active {
+  opacity: 0;
+  transform: scaleY(0.9);
+  transition: opacity 150ms ease-in, transform 150ms ease-in;
+  transform-origin: top;
+}
