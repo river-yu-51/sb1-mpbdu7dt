@@ -13,7 +13,7 @@ const Notification = () => {
       // Main timer to hide notification and reset state
       const timer = setTimeout(() => {
         hideNotification();
-      }, 3000); // Changed from 5000ms to 3000ms
+      }, 3000);
       // Small delay to ensure the exit animation can play
       hideTimer = setTimeout(() => {
         setShow(false);
@@ -61,8 +61,8 @@ const Notification = () => {
 
   return (
     <div
-      // Adjust transition duration and ease if needed for faster animation.
-      // Current `duration-300` seems reasonable for a short popup.
+      // Adjust transition duration and ease if needed for faster animation
+      // Current duration-300 seems reasonable for a short popup
       className={`fixed top-5 left-1/2 -translate-x-1/2 z-[100] transition-transform duration-300 ease-out ${show ? 'translate-y-0' : '-translate-y-20'}`}
     >
       <div

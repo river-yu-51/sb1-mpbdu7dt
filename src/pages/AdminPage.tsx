@@ -197,7 +197,19 @@ const AdminPage = () => {
                                 {upcomingAppointments.length > 0 ? upcomingAppointments.map(apt => (
                                     <div key={apt.id} className="bg-white p-4 rounded-lg shadow border flex justify-between items-center">
                                         <div><p className="font-semibold">{apt.service_type}</p><p className="text-sm text-gray-500">{new Date(apt.date).toLocaleDateString('en-CA', {dateStyle: 'long'})} at {apt.time}</p></div>
-                                        <a href={apt.google_meet_link} target="_blank" rel="noopener noreferrer" className="bg-blue-500 text-white px-3 py-1.5 text-sm rounded font-semibold hover:bg-blue-600 flex items-center"><ExternalLink size={14} className="mr-2"/>Start Meet</a>
+                                        {apt.google_meet_link ? (
+                                        <a
+                                            href={apt.google_meet_link}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="bg-blue-500 text-white px-3 py-1.5 text-sm rounded font-semibold hover:bg-blue-600 flex items-center"
+                                        >
+                                            <ExternalLink size={14} className="mr-2" />
+                                            Start Meet
+                                        </a>
+                                        ) : (
+                                        <span className="text-xs text-gray-500">No Meet link</span>
+                                        )}
                                     </div>
                                 )) : <p className="text-sm text-gray-500">No upcoming sessions.</p>}
                             </div>

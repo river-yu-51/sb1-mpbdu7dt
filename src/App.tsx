@@ -19,7 +19,7 @@ import ChatWidget from './components/ChatWidget';
 import ConsentFormPage from './pages/ConsentFormPage';
 import Notification from './components/Notification';
 import ReschedulePage from './pages/ReschedulePage';
-import WorkshopsPage from './pages/WorkshopsPage'; // New import for WorkshopsPage
+import WorkshopsPage from './pages/WorkshopsPage';
 
 function App() {
   return (

@@ -1,59 +1,91 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { User, Mail, Lock, Eye, EyeOff, UserPlus, Phone } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { useNotification } from '../contexts/NotificationContext';
+import React, { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Eye, EyeOff, Lock, Mail, Phone, User, UserPlus } from "lucide-react";
+import { useAuth } from "../contexts/AuthContext";
+import { useNotification } from "../contexts/NotificationContext";
 
-const RegisterPage = () => {
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    password: '',
-    confirmPassword: '',
-    age: ''
+function withTimeout<T>(p: Promise<T>, ms = 20000, label = "Request timed out") {
+  let t: number | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    t = window.setTimeout(() => reject(new Error(label)), ms);
   });
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const { register, isLoading } = useAuth();
+  return Promise.race([p, timeout]).finally(() => {
+    if (t) window.clearTimeout(t);
+  });
+}
+
+const RegisterPage: React.FC = () => {
   const navigate = useNavigate();
+  const { register } = useAuth();
   const { showNotification } = useNotification();
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
-  };
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [age, setAge] = useState<string>("");
+
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const [submitting, setSubmitting] = useState(false);
+
+  const validationError = useMemo(() => {
+    const e = email.trim();
+    const f = firstName.trim();
+    const l = lastName.trim();
+    const p = phone.trim();
+
+    if (!f || !l || !e || !p || !age || !password || !confirmPassword) {
+      return "Please fill out all required fields.";
+    }
+    if (password.length < 6) return "Password must be at least 6 characters long.";
+    if (password !== confirmPassword) return "Passwords do not match.";
+
+    const ageNum = Number(age);
+    if (!Number.isFinite(ageNum) || ageNum < 15 || ageNum > 25) {
+      return "Our services are designed for ages 15–25.";
+    }
+
+    return null;
+  }, [firstName, lastName, email, phone, age, password, confirmPassword]);
+
+  const canSubmit = !validationError && !submitting;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    const { firstName, lastName, email, phone, age: ageStr, password, confirmPassword } = formData;
-    if (!firstName || !lastName || !email || !phone || !ageStr || !password || !confirmPassword) {
-       return showNotification('Please fill out all required fields', 'error');
-    }
-    if (password !== confirmPassword) {
-      return showNotification('Passwords do not match', "error");
-    }
-    if (password.length < 6) {
-      return showNotification('Password must be at least 6 characters long', "error");
-    }
-    const age = parseInt(formData.age);
-    if (age < 15 || age > 25) {
-      return showNotification('Our services are designed for ages 15-25', "error");
+    if (!canSubmit) {
+      if (validationError) showNotification(validationError, "error");
+      return;
     }
 
-    const user = await register({ firstName, lastName, email, password, age, phone });
+    const trimmedEmail = email.trim();
 
-    if (user) {
-      showNotification('Account created successfully! Redirecting...', "success");
-      setTimeout(() => navigate('/account'), 1500);
-    } else {
-      showNotification('Registration failed. An account with this email may already exist.', "error");
-    }
+    setSubmitting(true);
+
+    void register({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: trimmedEmail,
+      password,
+      age: Number(age),
+      phone: phone.trim(),
+    }).then((created) => {
+      console.log("[register-page] register resolved:", created);
+    }).catch((err) => {
+      console.error("[register-page] register error:", err);
+    });
+
+    showNotification("Creating your account…", "info");
+    navigate("/login", { state: { email: trimmedEmail } });
+
+    setSubmitting(false);
   };
+
+
 
   return (
     <div className="py-20 bg-grima-50 min-h-screen">
@@ -64,58 +96,168 @@ const RegisterPage = () => {
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Create Your Account</h1>
             <p className="text-gray-600">Become a client and start moving towards a better financial future</p>
           </div>
-         
-          <form onSubmit={handleSubmit} className="space-y-6" noValidate>
-            <div className="grid grid-cols-2 gap-4">
-              <InputField label="First Name *" name="firstName" value={formData.firstName} onChange={handleInputChange} icon={<User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>} />
-              <InputField label="Last Name *" name="lastName" value={formData.lastName} onChange={handleInputChange} />
-            </div>
-            
-            <InputField label="Email Address *" name="email" type="email" value={formData.email} onChange={handleInputChange} icon={<Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>} />
-            
-            <div className="grid grid-cols-2 gap-4">
-                <InputField label="Phone Number *" name="phone" type="tel" value={formData.phone} onChange={handleInputChange} icon={<Phone size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>} />
-                <InputField label="Age *" name="age" type="select" value={formData.age} onChange={handleInputChange}>
-                    <option value="">Select age</option>
-                    {Array.from({ length: 11 }, (_, i) => i + 15).map((age) => (<option key={age} value={age}>{age}</option>))}
-                </InputField>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">First Name *</label>
+                <div className="relative">
+                  <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-lg pl-10"
+                    autoComplete="given-name"
+                    required
+                    disabled={submitting}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Last Name *</label>
+                <input
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg"
+                  autoComplete="family-name"
+                  required
+                  disabled={submitting}
+                />
+              </div>
             </div>
 
-            <InputField label="Password *" name="password" type={showPassword ? 'text' : 'password'} value={formData.password} onChange={handleInputChange} minLength={6} icon={<Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>} button={<button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showPassword ? <EyeOff size={20} /> : <Eye size={20} />}</button>} />
-            <InputField label="Confirm Password *" name="confirmPassword" type={showConfirmPassword ? 'text' : 'password'} value={formData.confirmPassword} onChange={handleInputChange} icon={<Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>} button={<button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}</button>} />
-            
-            <button type="submit" disabled={isLoading} className="w-full bg-grima-primary text-white py-3 px-4 rounded-lg font-semibold hover:bg-grima-dark transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
-              {isLoading ? 'Creating Account...' : 'Create Account'}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
+              <div className="relative">
+                <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg pl-10"
+                  autoComplete="email"
+                  required
+                  disabled={submitting}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
+                <div className="relative">
+                  <Phone size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-lg pl-10"
+                    autoComplete="tel"
+                    required
+                    disabled={submitting}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Age *</label>
+                <select
+                  value={age}
+                  onChange={(e) => setAge(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg bg-white"
+                  required
+                  disabled={submitting}
+                >
+                  <option value="">Select age</option>
+                  {Array.from({ length: 11 }, (_, i) => i + 15).map((a) => (
+                    <option key={a} value={String(a)}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Password *</label>
+              <div className="relative">
+                <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg pl-10 pr-12"
+                  autoComplete="new-password"
+                  minLength={6}
+                  required
+                  disabled={submitting}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  disabled={submitting}
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Confirm Password *</label>
+              <div className="relative">
+                <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg pl-10 pr-12"
+                  autoComplete="new-password"
+                  minLength={6}
+                  required
+                  disabled={submitting}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                  disabled={submitting}
+                >
+                  {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
+            </div>
+
+            {validationError && (
+              <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg">
+                {validationError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="w-full bg-grima-primary text-white py-3 px-4 rounded-lg font-semibold hover:bg-grima-dark transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submitting ? "Creating Account..." : "Create Account"}
             </button>
-          </form>
 
-          <div className="mt-6 text-center">
-            <p className="text-gray-600">
-              Already have an account?{' '}
-              <Link to="/login" className="text-grima-primary font-medium hover:text-grima-dark">
-                Sign in here
-              </Link>
-            </p>
-          </div>
+            <div className="text-center">
+              <p className="text-gray-600">
+                Already have an account?{" "}
+                <Link to="/login" className="text-grima-primary font-medium hover:text-grima-dark">
+                  Sign in here
+                </Link>
+              </p>
+            </div>
+          </form>
         </div>
       </div>
     </div>
   );
 };
-
-const InputField = ({ label, type = 'text', children, icon, button, ...props }: any) => (
-    <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">{label}</label>
-        <div className="relative">
-            {icon}
-            {type === 'select' ? (
-                <select {...props} className={`w-full p-3 border border-gray-300 rounded-lg bg-white ${icon ? 'pl-10' : ''}`}>{children}</select>
-            ) : (
-                <input type={type} {...props} className={`w-full p-3 border border-gray-300 rounded-lg ${icon ? 'pl-10' : ''} ${button ? 'pr-12' : ''}`} />
-            )}
-            {button}
-        </div>
-    </div>
-);
 
 export default RegisterPage;
