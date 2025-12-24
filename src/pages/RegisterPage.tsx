@@ -57,33 +57,42 @@ const RegisterPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!canSubmit) {
       if (validationError) showNotification(validationError, "error");
       return;
     }
 
     const trimmedEmail = email.trim();
-
     setSubmitting(true);
 
-    void register({
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      email: trimmedEmail,
-      password,
-      age: Number(age),
-      phone: phone.trim(),
-    }).then((created) => {
-      console.log("[register-page] register resolved:", created);
-    }).catch((err) => {
+    try {
+      showNotification("Creating your account…", "info");
+
+      const ok = await register({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: trimmedEmail,
+        password,
+        age: Number(age),
+        phone: phone.trim(),
+      });
+
+      if (!ok) {
+        showNotification("That email may already be registered. Try logging in instead.", "error");
+        return;
+      }
+
+      showNotification("Account created!", "success");
+      navigate(`/login?email=${encodeURIComponent(trimmedEmail)}`, { replace: true });
+    } catch (err: any) {
       console.error("[register-page] register error:", err);
-    });
-
-    showNotification("Creating your account…", "info");
-    navigate("/login", { state: { email: trimmedEmail } });
-
-    setSubmitting(false);
+      showNotification(err?.message || "Registration failed. Please try again.", "error");
+    } finally {
+      setSubmitting(false);
+    }
   };
+
 
 
 

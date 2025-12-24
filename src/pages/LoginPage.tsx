@@ -37,8 +37,6 @@ const LoginPage: React.FC = () => {
     setError(null);
 
     try {
-      console.log("[login-page] calling login()");
-
       const loginPromise = login(email, password);
 
       // Wait up to 4s for login() to resolve, but don't assume failure if it doesn't
