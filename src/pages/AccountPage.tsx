@@ -293,7 +293,6 @@ const AccountPage = () => {
 
   if (isLoading) return <div className="flex justify-center items-center h-screen"><p>Loading Dashboard...</p></div>;
   if (!user) return <Navigate to="/login" replace />;
-  if (user.isAdmin) return <Navigate to="/admin" replace />;
 
   const tabs = [
     { id: "appointments" as const, name: "Appointments", icon: <Calendar size={18} /> },

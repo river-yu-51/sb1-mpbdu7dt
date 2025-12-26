@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { db, User, Appointment, AssessmentScore, SessionNote, Message } from "../lib/database";
 import { supabase } from "../lib/supabase";
+import { useNavigate } from "react-router-dom";
 
 type AppUser = User & {
   firstName: string;
@@ -251,7 +252,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (!authUserId) return null;
 
-    // ✅ create/upsert profile row (only here)
+    // Create/upsert profile row, only here
     await ensureProfileRow({
       id: authUserId,
       email,
@@ -274,9 +275,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return appUser;
   };
 
+  const navigate = useNavigate();
+
   const logout = async () => {
     await supabase.auth.signOut();
     clearUserState();
+    navigate("/login", { replace: true });
   };
 
   const updateUser = async (userId: string, data: Partial<User> & any): Promise<boolean> => {

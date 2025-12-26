@@ -1,4 +1,3 @@
-// src/pages/AdminPage.tsx
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Navigate } from "react-router-dom";
 import {
@@ -12,11 +11,10 @@ import {
   ChevronLeft,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import type { User, Appointment, AssessmentScore, SessionNote } from "../lib/database";
+import type { User, Appointment, AssessmentScore } from "../lib/database";
 import { db, generateTimeSlots } from "../lib/database";
 import ScoreDisplay from "../components/ScoreDisplay";
 
-// --- Reusable Date Helpers ---
 const formatDate = (date: Date) =>
   date.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
 const getISOString = (date: Date) => date.toISOString().split("T")[0];
@@ -39,7 +37,6 @@ const generateWeekDates = (weekOffset: number) => {
 
 const fmtDateTime = (iso: string) => {
   const d = new Date(iso);
-  // e.g. "Dec 23, 2025, 3:30 PM"
   return d.toLocaleString("en-CA", {
     year: "numeric",
     month: "short",
@@ -49,7 +46,6 @@ const fmtDateTime = (iso: string) => {
   });
 };
 
-// --- Availability Component ---
 const AvailabilityManager: React.FC = () => {
   const [currentWeek, setCurrentWeek] = useState(0);
   const [weekDates, setWeekDates] = useState(generateWeekDates(0));
@@ -69,7 +65,7 @@ const AvailabilityManager: React.FC = () => {
   }, [weekDates]);
 
   useEffect(() => {
-    fetchAvailability();
+    void fetchAvailability();
   }, [fetchAvailability]);
 
   const handleSlotClick = async (date: Date, time: string) => {
@@ -97,6 +93,7 @@ const AvailabilityManager: React.FC = () => {
         <button
           onClick={() => setCurrentWeek((w) => w - 1)}
           className="flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+          type="button"
         >
           <ChevronLeft size={16} className="mr-1" />
           Previous Week
@@ -109,6 +106,7 @@ const AvailabilityManager: React.FC = () => {
         <button
           onClick={() => setCurrentWeek((w) => w + 1)}
           className="flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+          type="button"
         >
           Next Week
           <ChevronRight size={16} className="ml-1" />
@@ -135,9 +133,7 @@ const AvailabilityManager: React.FC = () => {
 
           {generateTimeSlots(weekDates[0]).map((time) => (
             <div key={time} className="grid grid-cols-8 border-t">
-              <div className="p-3 text-xs text-gray-600 border-r bg-gray-50 font-medium">
-                {time}
-              </div>
+              <div className="p-3 text-xs text-gray-600 border-r bg-gray-50 font-medium">{time}</div>
 
               {weekDates.map((date) => {
                 const isoDate = getISOString(date);
@@ -145,7 +141,7 @@ const AvailabilityManager: React.FC = () => {
                 return (
                   <div key={date.toISOString()} className="border-r last:border-r-0">
                     <button
-                      onClick={() => handleSlotClick(date, time)}
+                      onClick={() => void handleSlotClick(date, time)}
                       className={`w-full h-12 text-xs font-medium transition-colors ${
                         isUnavailable
                           ? "bg-red-100 text-red-700 hover:bg-red-200"
@@ -166,25 +162,45 @@ const AvailabilityManager: React.FC = () => {
   );
 };
 
-// --- Main Page Component ---
 const AdminPage: React.FC = () => {
-  // AuthContext user is likely AppUser (has isAdmin), while db User has role.
-  // We'll treat it as "any" here to avoid fighting context typing in this file.
   const { user, logout, loadAllUsers } = useAuth() as any;
+
+  const isAdmin = !!user?.isAdmin;
 
   const [clients, setClients] = useState<User[]>([]);
   const [selectedClient, setSelectedClient] = useState<User | null>(null);
-  const [clientData, setClientData] = useState<{ appointments: Appointment[]; scores: AssessmentScore[] } | null>(
-    null
-  );
+  const [clientData, setClientData] = useState<{
+    appointments: Appointment[];
+    scores: AssessmentScore[];
+  } | null>(null);
   const [isLoadingClientData, setIsLoadingClientData] = useState(false);
   const [activeTab, setActiveTab] = useState<"clients" | "availability">("clients");
 
   useEffect(() => {
-    if (user?.isAdmin) {
-      loadAllUsers().then(setClients).catch(console.error);
+    let cancelled = false;
+
+    if (!isAdmin) {
+      setClients([]);
+      setSelectedClient(null);
+      setClientData(null);
+      setIsLoadingClientData(false);
+      return;
     }
-  }, [user, loadAllUsers]);
+
+    (async () => {
+      try {
+        const all = await loadAllUsers();
+        if (!cancelled) setClients(all);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setClients([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, loadAllUsers]);
 
   const selectClient = useCallback(async (client: User) => {
     setSelectedClient(client);
@@ -201,12 +217,11 @@ const AdminPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!isAdmin) return;
     if (clients.length > 0 && !selectedClient) {
       void selectClient(clients[0]);
     }
-  }, [clients, selectedClient, selectClient]);
-
-  if (!user || !user.isAdmin) return <Navigate to="/login" replace />;
+  }, [isAdmin, clients, selectedClient, selectClient]);
 
   const upcomingAppointments = useMemo(
     () => clientData?.appointments.filter((a) => a.status === "scheduled") || [],
@@ -217,12 +232,14 @@ const AdminPage: React.FC = () => {
     [clientData]
   );
 
-  const displayName = (u: User) => {
+  const displayName = useCallback((u: User) => {
     const first = u.first ?? "";
     const last = u.last ?? "";
     const full = `${first} ${last}`.trim();
     return full || u.email;
-  };
+  }, []);
+
+  if (!user || !isAdmin) return <Navigate to="/login" replace />;
 
   return (
     <div className="flex h-screen bg-grima-50 font-serif">
@@ -252,7 +269,7 @@ const AdminPage: React.FC = () => {
         </nav>
 
         <button
-          onClick={logout}
+          onClick={() => void logout()}
           className="flex items-center p-2 rounded hover:bg-red-500/20 text-red-300 transition-colors"
           type="button"
         >
@@ -309,7 +326,9 @@ const AdminPage: React.FC = () => {
                     <button
                       className="text-sm text-red-600 hover:underline flex items-center"
                       type="button"
-                      onClick={() => alert("Delete client not wired yet. Add a db.deleteUser() + RLS policy first.")}
+                      onClick={() =>
+                        alert("Delete client not wired yet. Add a db.deleteUser() + RLS policy first.")
+                      }
                     >
                       <Trash2 size={14} className="mr-1" />
                       Delete Client
@@ -331,7 +350,11 @@ const AdminPage: React.FC = () => {
                               <div>
                                 <p className="font-semibold">{apt.service_type}</p>
                                 <p className="text-sm text-gray-500">
-                                  {fmtDateTime(apt.start_time)} – {new Date(apt.end_time).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })}
+                                  {fmtDateTime(apt.start_time)} –{" "}
+                                  {new Date(apt.end_time).toLocaleTimeString("en-CA", {
+                                    hour: "numeric",
+                                    minute: "2-digit",
+                                  })}
                                 </p>
                               </div>
 
@@ -380,9 +403,6 @@ const AdminPage: React.FC = () => {
                               <div className="px-4 pb-4 border-t">
                                 <h5 className="font-medium mt-3 text-sm">Existing Notes:</h5>
 
-                                {/* NOTE: db.getUserAppointments currently selects only appointments.*.
-                                    So apt.session_notes won't exist unless you join them.
-                                    We'll show a placeholder until you add the join. */}
                                 <p className="text-xs text-gray-500 mt-1">
                                   Notes aren’t loaded yet. (Add a join in db.getUserAppointments to include
                                   session_notes.)
@@ -415,7 +435,9 @@ const AdminPage: React.FC = () => {
                         <h3 className="font-bold text-xl mb-4">Assessment Scores</h3>
                         <div className="space-y-4">
                           {clientData?.scores && clientData.scores.length > 0 ? (
-                            clientData.scores.map((score) => <ScoreDisplay key={score.id} scoreData={score} />)
+                            clientData.scores.map((score) => (
+                              <ScoreDisplay key={score.id} scoreData={score} />
+                            ))
                           ) : (
                             <p className="text-sm text-gray-500">No assessment scores for this client.</p>
                           )}
