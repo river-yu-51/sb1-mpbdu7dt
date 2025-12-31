@@ -38,7 +38,7 @@ type FormData = {
 };
 
 type DayAvailability = { booked: string[]; blocked: string[] };
-type SlotState = "available" | "booked" | "blocked";
+type SlotState = "available" | "booked" | "blocked" | "passed";
 
 const BookingPage: React.FC = () => {
   const { user, addAppointment, register, appointments } = useAuth() as any;
@@ -311,9 +311,19 @@ const BookingPage: React.FC = () => {
     return true;
   };
 
+  const isPastSlot = (date: Date, timeStr: string) => {
+    const { hours, minutes } = parseTimeString(timeStr);
+    const slotStart = new Date(date);
+    slotStart.setHours(hours, minutes, 0, 0);
+    return slotStart.getTime() < Date.now();
+  };
+
+
   // 3-state logic
   const getSlotState = (date: Date, startLabel: string): SlotState => {
     if (!selectedService) return "blocked"; // until they pick a service, don’t pretend it’s available
+
+    if (isPastSlot(date, startLabel)) return "passed";
 
     const isoDate = toISODateLocal(date);
     const day = availability[isoDate] ?? { booked: [], blocked: [] };
@@ -758,6 +768,10 @@ const BookingPage: React.FC = () => {
                                       <div className="opacity-90">{rangeLabel}</div>
                                     </div>
                                   </button>
+                                ) : state === "passed" ? (
+                                  <div className="w-full h-12 bg-slate-100 flex items-center justify-center">
+                                    <span className="text-slate-500 text-xs">Passed</span>
+                                  </div>
                                 ) : (
                                   <div
                                     className="w-full h-12 bg-yellow-50 flex items-center justify-center"

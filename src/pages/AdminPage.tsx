@@ -46,6 +46,22 @@ const AdminPage: React.FC = () => {
 
   const formatWeekRange = (dates: Date[]) => `${formatDate(dates[0])} - ${formatDate(dates[6])}`;
 
+  // ---- helpers for "Passed" slots ----
+  const parseTime12h = (timeStr: string) => {
+    const [time, modifier] = timeStr.split(" ");
+    let [hours, minutes] = time.split(":").map(Number);
+    if (hours === 12 && modifier === "AM") hours = 0;
+    if (modifier === "PM" && hours < 12) hours += 12;
+    return { hours, minutes };
+  };
+
+  const isPastSlot = (date: Date, timeStr: string) => {
+    const { hours, minutes } = parseTime12h(timeStr);
+    const slotStart = new Date(date);
+    slotStart.setHours(hours, minutes, 0, 0);
+    return slotStart.getTime() < Date.now();
+  };
+
   // ---- load availability for the week ----
   useEffect(() => {
     let cancelled = false;
@@ -76,9 +92,10 @@ const AdminPage: React.FC = () => {
   const isBooked = (iso: string, time: string) => (availability[iso]?.booked ?? []).includes(time);
   const isBlocked = (iso: string, time: string) => (availability[iso]?.blocked ?? []).includes(time);
 
-  const toggleBlocked = async (iso: string, time: string) => {
-    // never allow toggling booked slots
+  const toggleBlocked = async (iso: string, time: string, dateObj?: Date) => {
+    // never allow toggling booked or passed slots
     if (isBooked(iso, time)) return;
+    if (dateObj && isPastSlot(dateObj, time)) return;
 
     const key = `${iso} ${time}`;
     const currentlyBlocked = isBlocked(iso, time);
@@ -146,7 +163,9 @@ const AdminPage: React.FC = () => {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-10">
           <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">Admin Availability</h1>
-          <p className="text-gray-600">Click a slot to toggle it as blocked (booked slots can’t be changed).</p>
+          <p className="text-gray-600">
+            Click a slot to toggle it as blocked (booked slots can’t be changed).
+          </p>
         </div>
 
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
@@ -176,13 +195,16 @@ const AdminPage: React.FC = () => {
 
             <div className="flex flex-wrap gap-3 text-xs text-gray-700 mb-4">
               <span className="inline-flex items-center gap-2">
-                <span className="w-3 h-3 rounded bg-white border inline-block" /> Available
+                <span className="w-3 h-3 rounded bg-emerald-100 border inline-block" /> Available
               </span>
               <span className="inline-flex items-center gap-2">
                 <span className="w-3 h-3 rounded bg-amber-100 border inline-block" /> Blocked
               </span>
               <span className="inline-flex items-center gap-2">
                 <span className="w-3 h-3 rounded bg-gray-100 border inline-block" /> Booked
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <span className="w-3 h-3 rounded bg-slate-100 border inline-block" /> Passed
               </span>
             </div>
 
@@ -215,27 +237,34 @@ const AdminPage: React.FC = () => {
                         const iso = toISODateLocal(date);
                         const booked = isBooked(iso, time);
                         const blocked = isBlocked(iso, time);
+                        const passed = isPastSlot(date, time);
+
                         const key = `${iso} ${time}`;
                         const isSaving = savingKey === key;
 
-                        // simple 2-mode admin UI:
-                        // - booked: non-clickable gray
-                        // - else: toggles blocked (amber) / available (white)
+                        // Priority: booked > passed > blocked/available
                         return (
                           <div key={date.toISOString()} className="border-r last:border-r-0">
                             {booked ? (
                               <div className="w-full h-12 bg-gray-100 flex items-center justify-center">
                                 <span className="text-gray-500 text-xs">Booked</span>
                               </div>
+                            ) : passed ? (
+                              <div
+                                className="w-full h-12 bg-slate-100 flex items-center justify-center"
+                                title="This time slot has already passed."
+                              >
+                                <span className="text-slate-500 text-xs">Passed</span>
+                              </div>
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => toggleBlocked(iso, time)}
+                                onClick={() => toggleBlocked(iso, time, date)}
                                 disabled={isSaving}
                                 className={`w-full h-12 text-xs font-medium transition-colors ${
                                   blocked
                                     ? "bg-amber-100 text-amber-900 hover:bg-amber-200"
-                                    : "bg-white text-gray-700 hover:bg-gray-50"
+                                    : "bg-emerald-100 text-emerald-900 hover:bg-emerald-200"
                                 } ${isSaving ? "opacity-60 cursor-wait" : ""}`}
                                 title={blocked ? "Click to unblock" : "Click to block"}
                               >
