@@ -34,9 +34,7 @@ interface AuthContextType {
   assessmentScores: AssessmentScore[];
 
   loadDataForUser: (userId: string) => Promise<void>;
-  addAppointment: (
-    appointment: Omit<Appointment, "id" | "created_at" | "status" | "session_notes" | "google_meet_link">
-  ) => Promise<void>;
+  addAppointment: (appointmentData: any) => Promise<Appointment>;
   cancelAppointment: (appointmentId: string) => Promise<void>;
   addAssessmentScore: (scoreData: Omit<AssessmentScore, "id" | "created_at">) => Promise<void>;
   addMessage: (messageData: Omit<Message, "id" | "status" | "created_at" | "updated_at" | "replies">) => Promise<void>;
@@ -309,8 +307,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const addAppointment = async (appointmentData: any) => {
-    await db.createAppointment(appointmentData);
-    if (user) void loadDataForUser(user.id);
+    const appt = await db.createAppointment(appointmentData);
+    const { data, error } = await supabase.functions.invoke("create_meet_for_appointment",
+      { body: { appointmentId: appt.id }, }
+    );
+
+    if (error) {
+      console.error("create_meet_for_appointment function error:", error);
+    }
+
+    if (user) await loadDataForUser(user.id);
+    return appt;
   };
 
   const cancelAppointment = async (appointmentId: string) => {

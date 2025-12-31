@@ -203,15 +203,15 @@ const UpcomingAppointmentCard = ({
           <p className="text-sm text-gray-500">{formatTimeRange(start, end)}</p>
         </div>
 
-        {isSessionTime() && meetLink ? (
+        {/*isSessionTime() &&*/ meetLink ? (
           <a
             href={meetLink}
             target="_blank"
             rel="noopener noreferrer"
-            className="bg-blue-600 text-white px-4 py-2 text-sm rounded-lg font-semibold hover:bg-blue-700 flex items-center shadow-sm"
+            className="bg-grima-primary text-white px-4 py-2 text-sm rounded-lg font-semibold hover:bg-green-700 flex items-center shadow-sm"
           >
             <ExternalLink size={14} className="mr-2" />
-            Start Session
+            Join Google Meet
           </a>
         ) : (
           <div className="text-right">

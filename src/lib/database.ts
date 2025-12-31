@@ -83,24 +83,38 @@ export interface AvailabilityBlock {
  *  ========================= */
 
 /**
- * Generates 30-min timeslots in 12h format for a given date.
- * (Same as before)
+ * Generates 15-min timeslots in 12h format for a given date
+ * Weekdays: 9:00 AM - 7:00 PM (subject to change)
+ * Weekends: 10:00 AM - 7:00 PM (subject to change)
  */
 export const generateTimeSlots = (date: Date) => {
   const dayOfWeek = date.getDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
   const startHour = isWeekend ? 10 : 9;
-  const endHour = 19;
+  const endHour = 19; // closing time at 7pm
 
   const slots: string[] = [];
-  for (let hour = startHour; hour <= endHour; hour++) {
-    const time12 = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
-    const ampm = hour >= 12 ? "PM" : "AM";
-    slots.push(`${time12}:00 ${ampm}`);
-    if (hour < endHour) slots.push(`${time12}:30 ${ampm}`);
+
+  // Generate start times from startHour:00 up to (endHour - 15 minutes)
+  const start = new Date(date);
+  start.setHours(startHour, 0, 0, 0);
+
+  const end = new Date(date);
+  end.setHours(endHour, 0, 0, 0);
+
+  for (let t = new Date(start); t < end; t = new Date(t.getTime() + 15 * 60 * 1000)) {
+    const hours = t.getHours();
+    const minutes = t.getMinutes();
+    const ampm = hours >= 12 ? "PM" : "AM";
+    const h12 = ((hours + 11) % 12) + 1;
+    const mm = String(minutes).padStart(2, "0");
+    slots.push(`${h12}:${mm} ${ampm}`);
   }
+
   return slots;
 };
+
 
 /**
  * Convert (YYYY-MM-DD, "3:30 PM") into a Date.
@@ -125,6 +139,13 @@ function parseLocalDateAndTime(dateYYYYMMDD: string, time12h: string): Date {
   if (ampm === "AM" && hour === 12) hour = 0;
 
   return new Date(year, month, day, hour, minute, 0, 0);
+}
+
+export function toISODateLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export const db = {
@@ -253,6 +274,11 @@ export const db = {
    *  - legacy { user_id, service_type, date, time, notes? } and converts to start/end (30 mins)
    */
   async createAppointment(appointmentData: any): Promise<Appointment> {
+    const durationMinutes =
+      Number(appointmentData.duration_minutes) ||
+      Number(appointmentData.durationMinutes) ||
+      30;
+
     const payload =
       appointmentData.start_time && appointmentData.end_time
         ? {
@@ -264,7 +290,7 @@ export const db = {
           }
         : (() => {
             const start = parseLocalDateAndTime(appointmentData.date, appointmentData.time);
-            const end = new Date(start.getTime() + 30 * 60 * 1000);
+            const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
             return {
               user_id: appointmentData.user_id,
               service_type: appointmentData.service_type,
@@ -274,15 +300,11 @@ export const db = {
             };
           })();
 
-    const { data, error } = await supabase
-      .from("appointments")
-      .insert(payload)
-      .select("*")
-      .single();
-
+    const { data, error } = await supabase.from("appointments").insert(payload).select("*").single();
     if (error) throw error;
     return data as any;
   },
+
 
   async updateAppointmentStatus(appointmentId: string, status: Appointment["status"]): Promise<void> {
     const { error } = await supabase
@@ -355,6 +377,44 @@ export const db = {
     return data as any;
   },
 
+  // Check if user can book regular sessions
+  async canBookRegularSessions(userId: string): Promise<boolean> {
+    // Consent
+    const { data: profile, error: pErr } = await supabase
+      .from("profiles")
+      .select("consent_signed")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (pErr) throw pErr;
+    const consentOk = !!profile?.consent_signed;
+
+    // Initial consult completed
+    const { data: intro, error: aErr } = await supabase
+      .from("appointments")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("service_type", "Initial Consultation")
+      .eq("status", "completed")
+      .limit(1);
+
+    if (aErr) throw aErr;
+    const introOk = (intro?.length ?? 0) > 0;
+
+    // Assessments completed
+    const { data: scores, error: sErr } = await supabase
+      .from("assessment_scores")
+      .select("type")
+      .eq("user_id", userId);
+
+    if (sErr) throw sErr;
+    const types = new Set((scores ?? []).map((s: any) => s.type));
+    const assessmentsOk = types.has("stress") && types.has("literacy");
+
+    return consentOk && introOk && assessmentsOk;
+  },
+
+
   /**
    * This was a "mock" trick before. In the real DB, do it properly:
    * simplest is just create a placeholder completed appointment using start/end.
@@ -383,34 +443,33 @@ export const db = {
    *  - availability_blocks (start/end)
    *  - appointments (start/end) where status='scheduled'
    */
-  async getAvailabilityForDate(dateYYYYMMDD: string): Promise<string[]> {
-    // Compute local day start/end
-    const dayStart = new Date(`${dateYYYYMMDD}T00:00:00`);
-    const dayEnd = new Date(`${dateYYYYMMDD}T23:59:59.999`);
+  async getAvailabilityForDate(
+    dateYYYYMMDD: string
+  ): Promise<{ booked: string[]; blocked: string[] }> {
+    const [y, m, d] = dateYYYYMMDD.split("-").map(Number);
 
-    // Fetch blocks
+    // local day boundaries
+    const dayStart = new Date(y, m - 1, d, 0, 0, 0, 0);
+    const dayEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
+
     const { data: blocks, error: blocksErr } = await supabase
       .from("availability_blocks")
       .select("*")
-      .gte("start_time", dayStart.toISOString())
-      .lte("start_time", dayEnd.toISOString());
-
+      .lt("start_time", dayEnd.toISOString())
+      .gt("end_time", dayStart.toISOString());
     if (blocksErr) throw blocksErr;
 
-    // Fetch booked appointments
-    const { data: booked, error: apptErr } = await supabase
+    const { data: bookedAppts, error: apptErr } = await supabase
       .from("appointments")
       .select("*")
       .eq("status", "scheduled")
-      .gte("start_time", dayStart.toISOString())
-      .lte("start_time", dayEnd.toISOString());
-
+      .lt("start_time", dayEnd.toISOString())
+      .gt("end_time", dayStart.toISOString());
     if (apptErr) throw apptErr;
 
-    const toTimeLabel = (iso: string) => {
-      const d = new Date(iso);
-      let hours = d.getHours();
-      const minutes = d.getMinutes();
+    const toTimeLabel = (dt: Date) => {
+      let hours = dt.getHours();
+      const minutes = dt.getMinutes();
       const ampm = hours >= 12 ? "PM" : "AM";
       hours = hours % 12;
       if (hours === 0) hours = 12;
@@ -418,11 +477,26 @@ export const db = {
       return `${hours}:${mm} ${ampm}`;
     };
 
-    const unavailable = new Set<string>();
-    (blocks ?? []).forEach((b: any) => unavailable.add(toTimeLabel(b.start_time)));
-    (booked ?? []).forEach((a: any) => unavailable.add(toTimeLabel(a.start_time)));
+    const addIntervalAs15MinBlocks = (startIso: string, endIso: string, out: Set<string>) => {
+      const s = new Date(startIso);
+      const e = new Date(endIso);
 
-    return Array.from(unavailable);
+      // clamp to this local day window
+      const start = s < dayStart ? new Date(dayStart) : s;
+      const end = e > dayEnd ? new Date(dayEnd) : e;
+
+      for (let t = new Date(start); t < end; t = new Date(t.getTime() + 15 * 60 * 1000)) {
+        out.add(toTimeLabel(t));
+      }
+    };
+
+    const booked = new Set<string>();
+    const blocked = new Set<string>();
+
+    (bookedAppts ?? []).forEach((a: any) => addIntervalAs15MinBlocks(a.start_time, a.end_time, booked));
+    (blocks ?? []).forEach((b: any) => addIntervalAs15MinBlocks(b.start_time, b.end_time, blocked));
+
+    return { booked: Array.from(booked), blocked: Array.from(blocked) };
   },
 
   /**
@@ -431,7 +505,7 @@ export const db = {
    */
   async updateAvailability(dateYYYYMMDD: string, time12h: string, isUnavailable: boolean): Promise<void> {
     const start = parseLocalDateAndTime(dateYYYYMMDD, time12h);
-    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    const end = new Date(start.getTime() + 15 * 60 * 1000);
 
     if (isUnavailable) {
       const { error } = await supabase.from("availability_blocks").insert({
@@ -440,7 +514,6 @@ export const db = {
       });
       if (error) throw error;
     } else {
-      // Remove matching block (best-effort exact match)
       const { error } = await supabase
         .from("availability_blocks")
         .delete()
