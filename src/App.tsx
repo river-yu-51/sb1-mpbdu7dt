@@ -14,6 +14,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import AccountPage from "./pages/AccountPage";
 import AdminPage from "./pages/AdminPage";
+import AdminServicesPage from "./pages/AdminServicesPage";
 import AssessmentsPage from "./pages/AssessmentsPage";
 import ChatWidget from "./components/ChatWidget";
 import ConsentFormPage from "./pages/ConsentFormPage";
@@ -42,6 +43,7 @@ function App() {
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/account" element={<AccountPage />} />
               <Route path="/admin" element={<AdminPage />} />
+              <Route path="/admin/services" element={<AdminServicesPage />} />
               <Route path="/assessments" element={<AssessmentsPage />} />
               <Route path="/consent" element={<ConsentFormPage />} />
             </Routes>

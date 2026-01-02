@@ -11,18 +11,20 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { useNotification } from "../contexts/NotificationContext";
-import { db, generateTimeSlots, toISODateLocal } from "../lib/database";
+import { db, generateTimeSlots, toISODateLocal, Service } from "../lib/database";
 
 type AppointmentGroup = {
   groupName: string;
   duration?: string;
   isSingleService: boolean;
   services: {
-    id: string;
+    id: string; // UUID
     name: string;
     duration: string;
     price: string;
     description?: string;
+    isInitial?: boolean;
+    requiresOnboarding?: boolean;
   }[];
 };
 
@@ -47,13 +49,17 @@ const BookingPage: React.FC = () => {
   const navigate = useNavigate();
   const { showNotification } = useNotification();
 
-  const [selectedService, setSelectedService] = useState<string>("");
+  // Service selection now uses UUIDs from DB
+  const [selectedServiceId, setSelectedServiceId] = useState<string>("");
+
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [selectedTime, setSelectedTime] = useState<string>("");
   const [currentWeek, setCurrentWeek] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const weekDates = useMemo(() => generateWeekDates(currentWeek), [currentWeek]);
 
+  const [services, setServices] = useState<Service[]>([]);
+  const [servicesLoading, setServicesLoading] = useState<boolean>(true);
 
   const [availability, setAvailability] = useState<Record<string, DayAvailability>>({});
 
@@ -71,72 +77,76 @@ const BookingPage: React.FC = () => {
     goals: "",
   });
 
-  const appointmentGroups: AppointmentGroup[] = useMemo(
-    () => [
-      {
-        groupName: "Initial Consultation",
-        isSingleService: true,
-        services: [
-          {
-            id: "initial",
-            name: "Initial Consultation",
-            duration: "60 min",
-            price: "FREE",
-            description:
-              "A comprehensive assessment-based session to gauge your current financial situation",
-          },
-        ],
-      },
-      {
-        groupName: "Informational Sessions",
-        duration: "30-60 min",
-        isSingleService: false,
-        services: [
-          { id: "spending", name: "Spending Habits", duration: "30-60 min", price: "$30" },
-          { id: "budgeting", name: "Budgeting", duration: "30-60 min", price: "$30" },
-          {
-            id: "savings",
-            name: "Interest Rates, Savings, & Loans",
-            duration: "30-60 min",
-            price: "$30",
-          },
-          { id: "credit", name: "Credit Cards", duration: "30-60 min", price: "$30" },
-          { id: "investing-basics", name: "Investing", duration: "30-60 min", price: "$30" },
-          { id: "taxes-accounts", name: "Taxes & Accounts", duration: "30-60 min", price: "$30" },
-        ],
-      },
-      {
-        groupName: "“Doing-Something” Sessions",
-        duration: "30-60 min",
-        isSingleService: false,
-        services: [
-          { id: "spreadsheet", name: '"The Spreadsheet"', duration: "30-60 min", price: "$30" },
-          { id: "investing-setup", name: "Investing Setup/Review", duration: "30-60 min", price: "$30" },
-          { id: "credit-setup", name: "Credit Card Setup/Review", duration: "30-60 min", price: "$30" },
-          { id: "filing-taxes", name: "Filing Your Taxes", duration: "30-60 min", price: "$30" },
-        ],
-      },
-      {
-        groupName: "Maintenance Sessions",
-        isSingleService: false,
-        services: [
-          { id: "maintenance-15", name: "Half-Length", duration: "15 min", price: "$20" },
-          { id: "maintenance-30", name: "Full-Length", duration: "30 min", price: "$30" },
-          { id: "maintenance-60", name: "Double-Length", duration: "60 min", price: "$40" },
-        ],
-      },
-    ],
-    []
+  // Load services from DB
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setServicesLoading(true);
+        const data = await db.getServices(true);
+        if (!cancelled) setServices(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error("getServices failed:", e);
+        if (!cancelled) setServices([]);
+      } finally {
+        if (!cancelled) setServicesLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Selected service object
+  const selectedService = useMemo(
+    () => services.find((s) => s.id === selectedServiceId) ?? null,
+    [services, selectedServiceId]
   );
 
+  // Group services by category for UI
+  const appointmentGroups: AppointmentGroup[] = useMemo(() => {
+    const byCategory = new Map<string, Service[]>();
+
+    for (const s of services) {
+      const cat = s.category || "Other";
+      byCategory.set(cat, [...(byCategory.get(cat) ?? []), s]);
+    }
+
+    return Array.from(byCategory.entries()).map(([category, svcs]) => {
+      const sorted = [...svcs].sort(
+        (a, b) =>
+          (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
+          a.name.localeCompare(b.name)
+      );
+
+      return {
+        groupName: category,
+        isSingleService: sorted.length === 1,
+        services: sorted.map((s) => ({
+          id: s.id,
+          name: s.name,
+          duration: `${s.duration_minutes} min`,
+          price: s.price_cents === 0 ? "FREE" : `$${Math.round(s.price_cents / 100)}`,
+          description: s.description ?? undefined,
+          isInitial: !!s.is_initial,
+          requiresOnboarding: !!s.requires_onboarding,
+        })),
+      };
+    });
+  }, [services]);
+
+  // This uses either joined service OR legacy snapshot for backwards compatibility
   const hasBookedInitialConsult = useMemo(() => {
-    return appts.some(
-      (apt: any) =>
-        apt.service_type === "Initial Consultation" &&
-        (apt.status === "scheduled" || apt.status === "completed")
-    );
+    return appts.some((apt: any) => {
+      const isInitial =
+        !!apt?.service?.is_initial || apt?.service_type === "Initial Consultation";
+      return isInitial && (apt.status === "scheduled" || apt.status === "completed");
+    });
   }, [appts]);
 
+  // Pre-fill form when logged in
   useEffect(() => {
     if (!user) return;
     setFormData((prev) => ({
@@ -149,13 +159,39 @@ const BookingPage: React.FC = () => {
     }));
   }, [user]);
 
-  const handleServiceSelect = (serviceId: string) => {
-    if (user) {
-      if (serviceId === "initial" && hasBookedInitialConsult) {
+  // Compute eligibility (onboarding) for logged-in users
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      if (!user?.id) return;
+      try {
+        setEligibilityLoading(true);
+        const ok = await db.canBookRegularSessions(user.id);
+        if (!cancelled) setCanBookRegular(!!ok);
+      } catch (e) {
+        console.error("canBookRegularSessions failed:", e);
+        if (!cancelled) setCanBookRegular(false);
+      } finally {
+        if (!cancelled) setEligibilityLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const handleServiceSelect = (serviceUUID: string) => {
+    const picked = services.find((s) => s.id === serviceUUID) ?? null;
+
+    if (user && picked) {
+      if (picked.is_initial && hasBookedInitialConsult) {
         showNotification("You have already booked an Initial Consultation.", "error");
         return;
       }
-      if (serviceId !== "initial") {
+
+      if (!picked.is_initial) {
         if (eligibilityLoading) {
           showNotification("Checking your onboarding status… try again in a moment.", "error");
           return;
@@ -170,28 +206,13 @@ const BookingPage: React.FC = () => {
       }
     }
 
-    setSelectedService(serviceId);
+    setSelectedServiceId(serviceUUID);
     setSelectedDate("");
     setSelectedTime("");
   };
 
-
-  const getDurationMinutesForService = (serviceId: string) => {
-    const svc = (() => {
-      for (const group of appointmentGroups) {
-        const s = group.services.find((x) => x.id === serviceId);
-        if (s) return s;
-      }
-      return null;
-    })();
-
-    if (!svc?.duration) return 30;
-
-    const m = svc.duration.match(/\d+/);
-    const n = m ? parseInt(m[0], 10) : 30;
-
-    if ([15, 30, 45, 60].includes(n)) return n;
-    return 30;
+  const getDurationMinutesForSelectedService = () => {
+    return selectedService?.duration_minutes ?? 30;
   };
 
   function generateWeekDates(weekOffset: number) {
@@ -210,6 +231,7 @@ const BookingPage: React.FC = () => {
     return dates;
   }
 
+  // Load availability
   useEffect(() => {
     let cancelled = false;
 
@@ -239,7 +261,6 @@ const BookingPage: React.FC = () => {
     };
   }, [weekDates]);
 
-
   const parseTimeString = (timeStr: string) => {
     const [time, modifier] = timeStr.split(" ");
     let [hours, minutes] = time.split(":").map(Number);
@@ -263,16 +284,14 @@ const BookingPage: React.FC = () => {
     return formatTimeLabel(t.getHours(), t.getMinutes());
   };
 
-  const calculateEndTime = (startTimeStr: string, durationStr: string) => {
-    if (!startTimeStr || !durationStr) return "";
+  const calculateEndTime = (startTimeStr: string, durationMinutes: number) => {
+    if (!startTimeStr || !Number.isFinite(durationMinutes)) return "";
     const { hours, minutes } = parseTimeString(startTimeStr);
-    const m = durationStr.match(/\d+/);
-    const durationInMinutes = m ? parseInt(m[0], 10) : NaN;
-    if (!Number.isFinite(durationInMinutes)) return "";
 
     const startTime = new Date();
     startTime.setHours(hours, minutes, 0, 0);
-    const endTime = new Date(startTime.getTime() + durationInMinutes * 60000);
+    const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
+
     return endTime.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -318,10 +337,8 @@ const BookingPage: React.FC = () => {
     return slotStart.getTime() < Date.now();
   };
 
-
-  // 3-state logic
   const getSlotState = (date: Date, startLabel: string): SlotState => {
-    if (!selectedService) return "blocked"; // until they pick a service, don’t pretend it’s available
+    if (!selectedServiceId) return "blocked"; // until service selected
 
     if (isPastSlot(date, startLabel)) return "passed";
 
@@ -331,15 +348,12 @@ const BookingPage: React.FC = () => {
     const bookedSet = new Set(day.booked);
     const blockedSet = new Set(day.blocked);
 
-    const durationMinutes = getDurationMinutesForService(selectedService);
+    const durationMinutes = getDurationMinutesForSelectedService();
 
-    // if the cell itself is occupied by an appointment
     if (bookedSet.has(startLabel)) return "booked";
 
-    // if cutoff/business hours fails, treat as blocked
     if (!passesCutoffAndHours(date, startLabel, durationMinutes)) return "blocked";
 
-    // if any block within the window conflicts (either booked or admin-blocked)
     const blocksNeeded = Math.ceil(durationMinutes / 15);
     for (let i = 0; i < blocksNeeded; i++) {
       const label = addMinutesToLabel(startLabel, i * 15);
@@ -377,26 +391,17 @@ const BookingPage: React.FC = () => {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const getSelectedServiceInfo = () => {
-    for (const group of appointmentGroups) {
-      const service = group.services.find((s) => s.id === selectedService);
-      if (service) return service;
-    }
-    return null;
-  };
-
   const renderBookingSummary = () => {
-    const serviceInfo = getSelectedServiceInfo();
-    if (!serviceInfo || !selectedTime) return null;
+    if (!selectedService || !selectedTime) return null;
 
-    const endTimeFormatted = calculateEndTime(selectedTime, serviceInfo.duration);
+    const endTimeFormatted = calculateEndTime(selectedTime, selectedService.duration_minutes);
     const timeRange = endTimeFormatted ? `${selectedTime} - ${endTimeFormatted}` : selectedTime;
 
     return (
       <div className="space-y-1 text-base">
         <p>
           <span className="text-black">Session:</span>{" "}
-          <span className="text-gray-600">{serviceInfo.name}</span>
+          <span className="text-gray-600">{selectedService.name}</span>
         </p>
         <p>
           <span className="text-black">Date:</span>{" "}
@@ -415,7 +420,9 @@ const BookingPage: React.FC = () => {
         </p>
         <p>
           <span className="text-black">Price:</span>{" "}
-          <span className="text-grima-primary font-bold">{serviceInfo.price}</span>
+          <span className="text-grima-primary font-bold">
+            {selectedService.price_cents === 0 ? "FREE" : `$${Math.round(selectedService.price_cents / 100)}`}
+          </span>
         </p>
       </div>
     );
@@ -424,7 +431,7 @@ const BookingPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!selectedService || !selectedDate || !selectedTime) {
+    if (!selectedServiceId || !selectedDate || !selectedTime) {
       showNotification("Please select a service, date, and time.", "error");
       return;
     }
@@ -470,15 +477,11 @@ const BookingPage: React.FC = () => {
         return;
       }
 
-      const selected = getSelectedServiceInfo();
-      const durationMinutes = getDurationMinutesForService(selectedService);
-
       await addAppointment({
         user_id: finalUser.id,
-        service_type: selected?.name || selectedService,
+        service_id: selectedServiceId, // ✅ UUID
         date: selectedDate,
         time: selectedTime,
-        duration_minutes: durationMinutes,
         notes: formData.goals || null,
       });
 
@@ -500,8 +503,10 @@ const BookingPage: React.FC = () => {
           "error"
         );
       } else {
-        // If your exclusion constraint triggers, it will land here.
-        showNotification("Booking failed. That time may have just been taken—please pick another.", "error");
+        showNotification(
+          "Booking failed. That time may have just been taken—please pick another.",
+          "error"
+        );
       }
     } finally {
       setIsSubmitting(false);
@@ -512,7 +517,7 @@ const BookingPage: React.FC = () => {
     if (!selectedDate || !selectedTime) return false;
     if (selectedDate !== isoDate) return false;
 
-    const durationMinutes = getDurationMinutesForService(selectedService);
+    const durationMinutes = getDurationMinutesForSelectedService();
     const blocksNeeded = Math.ceil(durationMinutes / 15);
 
     for (let i = 0; i < blocksNeeded; i++) {
@@ -522,8 +527,8 @@ const BookingPage: React.FC = () => {
   };
 
   const selectedDurationMinutes = useMemo(
-    () => (selectedService ? getDurationMinutesForService(selectedService) : 0),
-    [selectedService]
+    () => (selectedServiceId ? getDurationMinutesForSelectedService() : 0),
+    [selectedServiceId, selectedService?.duration_minutes]
   );
 
   return (
@@ -549,91 +554,90 @@ const BookingPage: React.FC = () => {
                 Select Appointment Type
               </h2>
 
-              <div className="space-y-4">
-                {appointmentGroups.map((group) => (
-                  <div key={group.groupName} className="border border-gray-200 rounded-lg">
-                    {group.isSingleService ? (
-                      group.services.map((service) => (
-                        <label
-                          key={service.id}
-                          className={`block p-4 cursor-pointer transition-colors rounded-lg ${
-                            selectedService === service.id
-                              ? "border-grima-primary bg-grima-50 border-2"
-                              : "hover:bg-gray-50"
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name="service"
-                            value={service.id}
-                            checked={selectedService === service.id}
-                            onChange={(e) => handleServiceSelect(e.target.value)}
-                            className="sr-only"
-                          />
-                          <div className="flex justify-between items-center">
-                            <h3 className="font-semibold text-gray-900 flex items-center">
-                              {service.name}{" "}
-                              <span className="text-sm text-gray-500 ml-2 font-normal">
-                                ({service.duration})
-                              </span>
-                            </h3>
-                            <span className="font-bold text-grima-primary">{service.price}</span>
-                          </div>
-                          {service.description && (
-                            <p className="text-sm text-gray-600 mt-1">{service.description}</p>
-                          )}
-                        </label>
-                      ))
-                    ) : (
-                      <div>
-                        <div className="p-4 bg-gray-50 border-b">
-                          <h3 className="font-semibold text-gray-900">
-                            {group.groupName}
-                            {group.duration && (
-                              <span className="font-normal text-sm text-gray-500 ml-2">
-                                ({group.duration})
-                              </span>
+              {servicesLoading ? (
+                <div className="text-sm text-gray-600">Loading services…</div>
+              ) : services.length === 0 ? (
+                <div className="text-sm text-red-600">
+                  No services found. Add services in the admin database first.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {appointmentGroups.map((group) => (
+                    <div key={group.groupName} className="border border-gray-200 rounded-lg">
+                      {group.isSingleService ? (
+                        group.services.map((service) => (
+                          <label
+                            key={service.id}
+                            className={`block p-4 cursor-pointer transition-colors rounded-lg ${
+                              selectedServiceId === service.id
+                                ? "border-grima-primary bg-grima-50 border-2"
+                                : "hover:bg-gray-50"
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="service"
+                              value={service.id}
+                              checked={selectedServiceId === service.id}
+                              onChange={(e) => handleServiceSelect(e.target.value)}
+                              className="sr-only"
+                            />
+                            <div className="flex justify-between items-center">
+                              <h3 className="font-semibold text-gray-900 flex items-center">
+                                {service.name}{" "}
+                                <span className="text-sm text-gray-500 ml-2 font-normal">
+                                  ({service.duration})
+                                </span>
+                              </h3>
+                              <span className="font-bold text-grima-primary">{service.price}</span>
+                            </div>
+                            {service.description && (
+                              <p className="text-sm text-gray-600 mt-1">{service.description}</p>
                             )}
-                          </h3>
-                        </div>
-                        <div className="p-2">
-                          {group.services.map((option) => (
-                            <label
-                              key={option.id}
-                              className={`block p-3 cursor-pointer rounded ${
-                                selectedService === option.id ? "bg-grima-100" : "hover:bg-gray-50"
-                              }`}
-                            >
-                              <input
-                                type="radio"
-                                name="service"
-                                value={option.id}
-                                checked={selectedService === option.id}
-                                onChange={(e) => handleServiceSelect(e.target.value)}
-                                className="sr-only"
-                              />
-                              <div className="flex justify-between items-center">
-                                <div>
-                                  <span className="font-medium">{option.name}</span>
-                                  {!group.duration && (
+                          </label>
+                        ))
+                      ) : (
+                        <div>
+                          <div className="p-4 bg-gray-50 border-b">
+                            <h3 className="font-semibold text-gray-900">{group.groupName}</h3>
+                          </div>
+                          <div className="p-2">
+                            {group.services.map((option) => (
+                              <label
+                                key={option.id}
+                                className={`block p-3 cursor-pointer rounded ${
+                                  selectedServiceId === option.id ? "bg-grima-100" : "hover:bg-gray-50"
+                                }`}
+                              >
+                                <input
+                                  type="radio"
+                                  name="service"
+                                  value={option.id}
+                                  checked={selectedServiceId === option.id}
+                                  onChange={(e) => handleServiceSelect(e.target.value)}
+                                  className="sr-only"
+                                />
+                                <div className="flex justify-between items-center">
+                                  <div>
+                                    <span className="font-medium">{option.name}</span>
                                     <span className="text-sm text-gray-500 ml-2">
                                       ({option.duration})
                                     </span>
-                                  )}
+                                  </div>
+                                  <span className="font-semibold">{option.price}</span>
                                 </div>
-                                <span className="font-semibold">{option.price}</span>
-                              </div>
-                            </label>
-                          ))}
+                              </label>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {selectedService && (
+            {selectedServiceId && (
               <div className="mb-8">
                 <div className="flex justify-between items-baseline mb-2">
                   <h2 className="text-2xl font-bold text-gray-900 flex items-center">
@@ -720,14 +724,9 @@ const BookingPage: React.FC = () => {
                             const inRange = isInSelectedRange(iso, time);
                             const isStart = selectedDate === iso && selectedTime === time;
 
-                            const durationMinutes = getDurationMinutesForService(selectedService);
+                            const durationMinutes = getDurationMinutesForSelectedService();
                             const rangeLabel = getRangeLabel(date, time, durationMinutes);
 
-                            // PRIORITY:
-                            // 1) booked always wins
-                            // 2) selected start wins
-                            // 3) inRange (included) wins even if state === "blocked"
-                            // 4) otherwise follow state
                             return (
                               <div key={date.toISOString()} className="border-r last:border-r-0">
                                 {state === "booked" ? (
@@ -782,7 +781,6 @@ const BookingPage: React.FC = () => {
                                 )}
                               </div>
                             );
-
                           })}
                         </div>
                       ))}

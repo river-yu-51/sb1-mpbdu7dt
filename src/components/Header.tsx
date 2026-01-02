@@ -123,18 +123,16 @@ const Header = () => {
                 type="button"
                 id="services-dropdown-button"
                 onClick={() => setIsServicesDropdownOpen(v => !v)}
-                className={`flex items-center text-base font-medium transition-colors duration-200 py-2 ${
-                  isServicesDropdownOpen || isServicesRoute
+                className={`flex items-center text-base font-medium transition-colors duration-200 py-2 ${isServicesDropdownOpen || isServicesRoute
                     ? 'text-grima-primary'
                     : 'text-gray-700 hover:text-grima-primary'
-                }`}
+                  }`}
               >
                 All Services
                 <ChevronDown
                   size={14}
-                  className={`ml-1 transition-transform duration-200 ${
-                    isServicesDropdownOpen ? 'rotate-180' : ''
-                  }`}
+                  className={`ml-1 transition-transform duration-200 ${isServicesDropdownOpen ? 'rotate-180' : ''
+                    }`}
                 />
               </button>
 
@@ -172,11 +170,10 @@ const Header = () => {
                   key={item.name}
                   to={item.href}
                   onClick={item.onClick || closeAllMenus}
-                  className={`text-base font-medium transition-colors duration-200 ${
-                    location.pathname === item.href
+                  className={`text-base font-medium transition-colors duration-200 ${location.pathname === item.href
                       ? 'text-grima-primary'
                       : 'text-gray-700 hover:text-grima-primary'
-                  }`}
+                    }`}
                 >
                   {item.name}
                 </Link>
@@ -212,15 +209,27 @@ const Header = () => {
                       </Link>
 
                       {isAdmin && (
-                        <Link
-                          to="/admin"
-                          className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                          onClick={closeAllMenus}
-                        >
-                          <Settings size={14} className="inline mr-2" />
-                          Admin
-                        </Link>
+                        <>
+                          <Link
+                            to="/admin"
+                            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            onClick={closeAllMenus}
+                          >
+                            <Settings size={14} className="inline mr-2" />
+                            Admin Dashboard
+                          </Link>
+
+                          <Link
+                            to="/admin/services"
+                            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            onClick={closeAllMenus}
+                          >
+                            <Box size={14} className="inline mr-2" />
+                            Admin Services
+                          </Link>
+                        </>
                       )}
+
 
                       <button
                         type="button"
@@ -278,18 +287,16 @@ const Header = () => {
                   <button
                     type="button"
                     onClick={() => setIsServicesDropdownOpen(v => !v)}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-base font-medium rounded-md ${
-                      isServicesDropdownOpen
+                    className={`w-full flex items-center justify-between px-3 py-2 text-base font-medium rounded-md ${isServicesDropdownOpen
                         ? 'text-grima-primary bg-grima-50'
                         : 'text-gray-700 hover:text-grima-primary hover:bg-grima-50'
-                    }`}
+                      }`}
                   >
                     All Services
                     <ChevronDown
                       size={18}
-                      className={`ml-1 transition-transform ${
-                        isServicesDropdownOpen ? 'rotate-180' : ''
-                      }`}
+                      className={`ml-1 transition-transform ${isServicesDropdownOpen ? 'rotate-180' : ''
+                        }`}
                     />
                   </button>
 
@@ -315,11 +322,10 @@ const Header = () => {
                     key={item.name}
                     to={item.href}
                     onClick={item.onClick || closeAllMenus}
-                    className={`block px-3 py-2 text-base font-medium rounded-md ${
-                      location.pathname === item.href
+                    className={`block px-3 py-2 text-base font-medium rounded-md ${location.pathname === item.href
                         ? 'text-grima-primary bg-grima-50'
                         : 'text-gray-700 hover:text-grima-primary hover:bg-grima-50'
-                    }`}
+                      }`}
                   >
                     {item.name}
                   </Link>
@@ -337,13 +343,23 @@ const Header = () => {
                       </Link>
 
                       {isAdmin && (
-                        <Link
-                          to="/admin"
-                          className="block px-3 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
-                          onClick={closeAllMenus}
-                        >
-                          Admin Dashboard
-                        </Link>
+                        <>
+                          <Link
+                            to="/admin"
+                            className="block px-3 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
+                            onClick={closeAllMenus}
+                          >
+                            Admin Dashboard
+                          </Link>
+
+                          <Link
+                            to="/admin/services"
+                            className="block px-3 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
+                            onClick={closeAllMenus}
+                          >
+                            Admin Services
+                          </Link>
+                        </>
                       )}
 
                       <button

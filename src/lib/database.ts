@@ -34,22 +34,24 @@ export interface MessageReply {
   id: string;
   message_id: string;
   sender_type: "admin" | "client";
-  sender_name?: string | null; // Optional, might add later
+  sender_name?: string | null;
   content: string;
   created_at: string;
 }
 
-export interface Appointment {
+export interface Service {
   id: string;
-  user_id: string;
-  service_type: string;
-  start_time: string; // timestamptz ISO
-  end_time: string;   // timestamptz ISO
-  status: "scheduled" | "completed" | "cancelled";
-  notes: string | null;
+  category: string;
+  name: string;
+  description: string | null;
+  duration_minutes: number;
+  price_cents: number;
+  is_active: boolean;
+  requires_onboarding: boolean;
+  is_initial: boolean;
+  sort_order: number;
   created_at: string;
-  google_meet_link?: string | null; // Optional, might add later
-  session_notes?: SessionNote[];
+  updated_at: string;
 }
 
 export interface SessionNote {
@@ -59,6 +61,26 @@ export interface SessionNote {
   content: string;
   file_url: string | null;
   created_at: string;
+}
+
+export interface Appointment {
+  id: string;
+  user_id: string;
+
+  service_id: string | null; // uuid
+  service_type?: string; // legacy (name)
+
+  start_time: string;
+  end_time: string;
+  status: "scheduled" | "completed" | "cancelled";
+  notes: string | null;
+  created_at: string;
+
+  google_meet_link?: string | null;
+  session_notes?: SessionNote[];
+
+  // optional joined service (if you select it)
+  service?: Service;
 }
 
 export interface AssessmentScore {
@@ -82,21 +104,15 @@ export interface AvailabilityBlock {
  *  UI helpers
  *  ========================= */
 
-/**
- * Generates 15-min timeslots in 12h format for a given date
- * Weekdays: 9:00 AM - 7:00 PM (subject to change)
- * Weekends: 10:00 AM - 7:00 PM (subject to change)
- */
 export const generateTimeSlots = (date: Date) => {
   const dayOfWeek = date.getDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
   const startHour = isWeekend ? 10 : 9;
-  const endHour = 19; // closing time at 7pm
+  const endHour = 19;
 
   const slots: string[] = [];
 
-  // Generate start times from startHour:00 up to (endHour - 15 minutes)
   const start = new Date(date);
   start.setHours(startHour, 0, 0, 0);
 
@@ -115,14 +131,7 @@ export const generateTimeSlots = (date: Date) => {
   return slots;
 };
 
-
-/**
- * Convert (YYYY-MM-DD, "3:30 PM") into a Date.
- * NOTE: This uses the browser locale timezone.
- * Good enough to unblock you; later we can make this timezone-explicit.
- */
 function parseLocalDateAndTime(dateYYYYMMDD: string, time12h: string): Date {
-  // Safe-ish manual parse
   const [yearStr, monthStr, dayStr] = dateYYYYMMDD.split("-");
   const year = Number(yearStr);
   const month = Number(monthStr) - 1;
@@ -150,24 +159,13 @@ export function toISODateLocal(d: Date): string {
 
 export const db = {
   async getUser(email: string): Promise<User | null> {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("email", email)
-      .maybeSingle();
-
+    const { data, error } = await supabase.from("profiles").select("*").eq("email", email).maybeSingle();
     if (error) throw error;
     return (data ?? null) as any;
   },
 
   async updateUser(userId: string, updateData: Partial<User>): Promise<User | null> {
-    const { data, error } = await supabase
-      .from("profiles")
-      .update(updateData)
-      .eq("id", userId)
-      .select("*")
-      .single();
-
+    const { data, error } = await supabase.from("profiles").update(updateData).eq("id", userId).select("*").single();
     if (error) throw error;
     return data as any;
   },
@@ -179,43 +177,32 @@ export const db = {
       .eq("id", userId)
       .select("*")
       .single();
-
     if (error) throw error;
     return data as any;
   },
 
   async getAllUsers(): Promise<User[]> {
-    // RLS allows only admins to select all profiles => this will work only for admins
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .neq("role", "admin")
       .order("created_at", { ascending: false });
-
     if (error) throw error;
     return (data ?? []) as any;
   },
 
   /** -------- Messages -------- */
 
-  async createMessage(messageData: Omit<Message, "id" | "status" | "created_at" | "updated_at" | "replies">): Promise<Message> {
-    const { data, error } = await supabase
-      .from("messages")
-      .insert(messageData)
-      .select("*")
-      .single();
-
+  async createMessage(
+    messageData: Omit<Message, "id" | "status" | "created_at" | "updated_at" | "replies">
+  ): Promise<Message> {
+    const { data, error } = await supabase.from("messages").insert(messageData).select("*").single();
     if (error) throw error;
     return data as any;
   },
 
   async getUserMessages(userId: string): Promise<Message[]> {
-    const { data, error } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
-
+    const { data, error } = await supabase.from("messages").select("*").eq("user_id", userId).order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []) as any;
   },
@@ -226,30 +213,24 @@ export const db = {
       .select("*")
       .eq("message_id", messageId)
       .order("created_at", { ascending: true });
-
     if (error) throw error;
     return (data ?? []) as any;
   },
 
   async addMessageReply(replyData: Omit<MessageReply, "id" | "created_at">): Promise<MessageReply> {
     const { sender_name, ...rest } = replyData as any;
-
-    const { data, error } = await supabase
-      .from("message_replies")
-      .insert(rest)
-      .select("*")
-      .single();
-
+    const { data, error } = await supabase.from("message_replies").insert(rest).select("*").single();
     if (error) throw error;
     return data as any;
   },
 
   /** -------- Appointments -------- */
 
+  // RECOMMENDED: include joined service in case UI wants it
   async getUserAppointments(userId: string): Promise<Appointment[]> {
     const { data, error } = await supabase
       .from("appointments")
-      .select("*")
+      .select("*, service:services(*)")
       .eq("user_id", userId)
       .order("start_time", { ascending: false });
 
@@ -260,7 +241,7 @@ export const db = {
   async getAppointmentById(id: string): Promise<Appointment | null> {
     const { data, error } = await supabase
       .from("appointments")
-      .select("*")
+      .select("*, service:services(*)")
       .eq("id", id)
       .maybeSingle();
 
@@ -268,50 +249,51 @@ export const db = {
     return (data ?? null) as any;
   },
 
-  /**
-   * Accepts either:
-   *  - { user_id, service_type, start_time, end_time, notes? }
-   *  - legacy { user_id, service_type, date, time, notes? } and converts to start/end (30 mins)
-   */
   async createAppointment(appointmentData: any): Promise<Appointment> {
+    let service: Service | null = null;
+
+    if (appointmentData.service_id) {
+      const { data, error } = await supabase.from("services").select("*").eq("id", appointmentData.service_id).maybeSingle();
+      if (error) throw error;
+      service = (data ?? null) as any;
+      if (!service) throw new Error("Selected service not found.");
+    }
+
     const durationMinutes =
       Number(appointmentData.duration_minutes) ||
       Number(appointmentData.durationMinutes) ||
+      service?.duration_minutes ||
       30;
 
-    const payload =
-      appointmentData.start_time && appointmentData.end_time
-        ? {
-            user_id: appointmentData.user_id,
-            service_type: appointmentData.service_type,
-            start_time: appointmentData.start_time,
-            end_time: appointmentData.end_time,
-            notes: appointmentData.notes ?? null,
-          }
-        : (() => {
-            const start = parseLocalDateAndTime(appointmentData.date, appointmentData.time);
-            const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
-            return {
-              user_id: appointmentData.user_id,
-              service_type: appointmentData.service_type,
-              start_time: start.toISOString(),
-              end_time: end.toISOString(),
-              notes: appointmentData.notes ?? null,
-            };
-          })();
+    const makeStartEnd = () => {
+      if (appointmentData.start_time && appointmentData.end_time) {
+        return { start_time: appointmentData.start_time, end_time: appointmentData.end_time };
+      }
+      const start = parseLocalDateAndTime(appointmentData.date, appointmentData.time);
+      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+      return { start_time: start.toISOString(), end_time: end.toISOString() };
+    };
+
+    const { start_time, end_time } = makeStartEnd();
+
+    const payload: any = {
+      user_id: appointmentData.user_id,
+      service_id: appointmentData.service_id ?? null,
+      // keep legacy snapshot during transition:
+      service_type: appointmentData.service_type ?? service?.name ?? null,
+      start_time,
+      end_time,
+      notes: appointmentData.notes ?? null,
+      status: appointmentData.status ?? "scheduled",
+    };
 
     const { data, error } = await supabase.from("appointments").insert(payload).select("*").single();
     if (error) throw error;
     return data as any;
   },
 
-
   async updateAppointmentStatus(appointmentId: string, status: Appointment["status"]): Promise<void> {
-    const { error } = await supabase
-      .from("appointments")
-      .update({ status })
-      .eq("id", appointmentId);
-
+    const { error } = await supabase.from("appointments").update({ status }).eq("id", appointmentId);
     if (error) throw error;
   },
 
@@ -330,15 +312,32 @@ export const db = {
     return data as any;
   },
 
+  /** -------- Services -------- */
+
+  async getServices(activeOnly = true): Promise<Service[]> {
+    let q = supabase.from("services").select("*").order("category").order("sort_order").order("name");
+    if (activeOnly) q = q.eq("is_active", true);
+    const { data, error } = await q;
+    if (error) throw error;
+    return (data ?? []) as any;
+  },
+
+  async upsertService(service: Partial<Service> & Pick<Service, "name" | "category" | "duration_minutes">): Promise<Service> {
+    const { data, error } = await supabase.from("services").upsert(service).select("*").single();
+    if (error) throw error;
+    return data as any;
+  },
+
+  async deleteService(id: string): Promise<void> {
+    const { error } = await supabase.from("services").delete().eq("id", id);
+    if (error) throw error;
+  },
+
   /** -------- Session notes -------- */
 
   async addSessionNote(appointmentId: string, noteData: Omit<SessionNote, "id" | "created_at" | "appointment_id">): Promise<void> {
     const payload = { ...noteData, appointment_id: appointmentId };
-
-    const { error } = await supabase
-      .from("session_notes")
-      .insert(payload);
-
+    const { error } = await supabase.from("session_notes").insert(payload);
     if (error) throw error;
   },
 
@@ -348,7 +347,6 @@ export const db = {
       .select("*")
       .eq("appointment_id", appointmentId)
       .order("created_at", { ascending: false });
-
     if (error) throw error;
     return (data ?? []) as any;
   },
@@ -356,28 +354,19 @@ export const db = {
   /** -------- Assessment scores -------- */
 
   async getUserAssessmentScores(userId: string): Promise<AssessmentScore[]> {
-    const { data, error } = await supabase
-      .from("assessment_scores")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
-
+    const { data, error } = await supabase.from("assessment_scores").select("*").eq("user_id", userId).order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []) as any;
   },
 
   async addAssessmentScore(scoreData: Omit<AssessmentScore, "id" | "created_at">): Promise<AssessmentScore> {
-    const { data, error } = await supabase
-      .from("assessment_scores")
-      .insert(scoreData)
-      .select("*")
-      .single();
-
+    const { data, error } = await supabase.from("assessment_scores").insert(scoreData).select("*").single();
     if (error) throw error;
     return data as any;
   },
 
-  // Check if user can book regular sessions
+  /** -------- Eligibility -------- */
+
   async canBookRegularSessions(userId: string): Promise<boolean> {
     // Consent
     const { data: profile, error: pErr } = await supabase
@@ -385,28 +374,25 @@ export const db = {
       .select("consent_signed")
       .eq("id", userId)
       .maybeSingle();
-
     if (pErr) throw pErr;
     const consentOk = !!profile?.consent_signed;
 
-    // Initial consult completed
-    const { data: intro, error: aErr } = await supabase
+    // Initial consult completed:
+    // New path: appointment.service_id -> services.is_initial = true
+    // Legacy fallback: appointment.service_type === "Initial Consultation"
+    const { data: appts, error: aErr } = await supabase
       .from("appointments")
-      .select("id")
+      .select("status, service_type, service:services(is_initial)")
       .eq("user_id", userId)
-      .eq("service_type", "Initial Consultation")
-      .eq("status", "completed")
-      .limit(1);
-
+      .eq("status", "completed");
     if (aErr) throw aErr;
-    const introOk = (intro?.length ?? 0) > 0;
+
+    const introOk =
+      (appts ?? []).some((row: any) => row?.service?.is_initial === true) ||
+      (appts ?? []).some((row: any) => row?.service_type === "Initial Consultation");
 
     // Assessments completed
-    const { data: scores, error: sErr } = await supabase
-      .from("assessment_scores")
-      .select("type")
-      .eq("user_id", userId);
-
+    const { data: scores, error: sErr } = await supabase.from("assessment_scores").select("type").eq("user_id", userId);
     if (sErr) throw sErr;
     const types = new Set((scores ?? []).map((s: any) => s.type));
     const assessmentsOk = types.has("stress") && types.has("literacy");
@@ -414,17 +400,13 @@ export const db = {
     return consentOk && introOk && assessmentsOk;
   },
 
-
-  /**
-   * This was a "mock" trick before. In the real DB, do it properly:
-   * simplest is just create a placeholder completed appointment using start/end.
-   */
   async grantAssessmentRetake(userId: string): Promise<void> {
     const start = new Date();
     const end = new Date(start.getTime() + 1 * 60 * 1000);
 
     const { error } = await supabase.from("appointments").insert({
       user_id: userId,
+      service_id: null,
       service_type: "Admin-Granted Assessment Retake",
       start_time: start.toISOString(),
       end_time: end.toISOString(),
@@ -437,18 +419,9 @@ export const db = {
 
   /** -------- Availability -------- */
 
-  /**
-   * Returns a list of blocked times ("3:30 PM") + booked times for a given date.
-   * Uses:
-   *  - availability_blocks (start/end)
-   *  - appointments (start/end) where status='scheduled'
-   */
-  async getAvailabilityForDate(
-    dateYYYYMMDD: string
-  ): Promise<{ booked: string[]; blocked: string[] }> {
+  async getAvailabilityForDate(dateYYYYMMDD: string): Promise<{ booked: string[]; blocked: string[] }> {
     const [y, m, d] = dateYYYYMMDD.split("-").map(Number);
 
-    // local day boundaries
     const dayStart = new Date(y, m - 1, d, 0, 0, 0, 0);
     const dayEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
 
@@ -481,7 +454,6 @@ export const db = {
       const s = new Date(startIso);
       const e = new Date(endIso);
 
-      // clamp to this local day window
       const start = s < dayStart ? new Date(dayStart) : s;
       const end = e > dayEnd ? new Date(dayEnd) : e;
 
@@ -499,10 +471,6 @@ export const db = {
     return { booked: Array.from(booked), blocked: Array.from(blocked) };
   },
 
-  /**
-   * Toggle a 30-min availability block at the given local date/time.
-   * Admin-only under RLS (as per your schema).
-   */
   async updateAvailability(dateYYYYMMDD: string, time12h: string, isUnavailable: boolean): Promise<void> {
     const start = parseLocalDateAndTime(dateYYYYMMDD, time12h);
     const end = new Date(start.getTime() + 15 * 60 * 1000);
@@ -519,7 +487,6 @@ export const db = {
         .delete()
         .eq("start_time", start.toISOString())
         .eq("end_time", end.toISOString());
-
       if (error) throw error;
     }
   },
