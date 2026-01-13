@@ -83,8 +83,8 @@ const RegisterPage: React.FC = () => {
         return;
       }
 
-      showNotification("Account created!", "success");
-      navigate(`/login?email=${encodeURIComponent(trimmedEmail)}`, { replace: true });
+      showNotification("Account created! Check your email to verify before signing in.", "success");
+      navigate(`/login?email=${encodeURIComponent(trimmedEmail)}&verify=1`, { replace: true });
     } catch (err: any) {
       console.error("[register-page] register error:", err);
       showNotification(err?.message || "Registration failed. Please try again.", "error");

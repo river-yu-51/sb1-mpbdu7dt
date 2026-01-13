@@ -1,24 +1,18 @@
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  Calendar,
-  CheckCircle,
-  ArrowRight,
-  ChevronLeft,
-  ChevronRight,
-  Info,
-  Lock,
-} from "lucide-react";
+import { Calendar, CheckCircle, ArrowRight, ChevronLeft, ChevronRight, Info, Lock } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { useNotification } from "../contexts/NotificationContext";
-import { db, generateTimeSlots, toISODateLocal, Service } from "../lib/database";
+import { db, Service } from "../lib/database";
+import { DateTime } from "luxon";
+import { BUSINESS_TZ } from "../lib/time";
 
 type AppointmentGroup = {
   groupName: string;
   duration?: string;
   isSingleService: boolean;
   services: {
-    id: string; // UUID
+    id: string;
     name: string;
     duration: string;
     price: string;
@@ -42,21 +36,147 @@ type FormData = {
 type DayAvailability = { booked: string[]; blocked: string[] };
 type SlotState = "available" | "booked" | "blocked" | "passed";
 
+type WeekDay = {
+  iso: string;      // YYYY-MM-DD in BUSINESS_TZ
+  labelTop: string; // "Mon"
+  labelBottom: string; // "Jan 7"
+};
+
+function parseTime12h(timeStr: string): { hours: number; minutes: number } {
+  const [time, modifierRaw] = timeStr.trim().split(/\s+/);
+  const modifier = (modifierRaw || "").toUpperCase();
+  let [hours, minutes] = time.split(":").map(Number);
+
+  if (modifier === "AM" && hours === 12) hours = 0;
+  if (modifier === "PM" && hours < 12) hours += 12;
+
+  return { hours, minutes };
+}
+
+function formatTimeLabel(hours24: number, minutes: number): string {
+  const ampm = hours24 >= 12 ? "PM" : "AM";
+  let h12 = hours24 % 12;
+  if (h12 === 0) h12 = 12;
+  const mm = String(minutes).padStart(2, "0");
+  return `${h12}:${mm} ${ampm}`;
+}
+
+function addMinutesToLabel(timeStr: string, addMin: number): string {
+  const { hours, minutes } = parseTime12h(timeStr);
+  const base = DateTime.fromObject({ year: 2000, month: 1, day: 1, hour: hours, minute: minutes }, { zone: BUSINESS_TZ });
+  const t = base.plus({ minutes: addMin });
+  return formatTimeLabel(t.hour, t.minute);
+}
+
+function calculateEndTimeLabel(startTimeStr: string, durationMinutes: number): string {
+  if (!startTimeStr || !Number.isFinite(durationMinutes)) return "";
+  const { hours, minutes } = parseTime12h(startTimeStr);
+  const start = DateTime.fromObject({ year: 2000, month: 1, day: 1, hour: hours, minute: minutes }, { zone: BUSINESS_TZ });
+  const end = start.plus({ minutes: durationMinutes });
+  return end.toFormat("h:mm a");
+}
+
+function isPastSlot(dateISO: string, timeStr: string): boolean {
+  const { hours, minutes } = parseTime12h(timeStr);
+  const slot = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ }).set({
+    hour: hours,
+    minute: minutes,
+    second: 0,
+    millisecond: 0,
+  });
+  return slot < DateTime.now().setZone(BUSINESS_TZ);
+}
+
+function passesCutoffAndHours(dateISO: string, timeStr: string, durationMinutes: number): boolean {
+  const { hours, minutes } = parseTime12h(timeStr);
+
+  const slotStart = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ }).set({
+    hour: hours,
+    minute: minutes,
+    second: 0,
+    millisecond: 0,
+  });
+
+  // 24h cutoff (Toronto)
+  const cutoff = DateTime.now().setZone(BUSINESS_TZ).plus({ hours: 24 });
+  if (slotStart <= cutoff) return false;
+
+  // Business hours (Toronto)
+  const isWeekend = slotStart.weekday === 6 || slotStart.weekday === 7; // Sat/Sun
+  const startHour = isWeekend ? 10 : 9;
+  const endHour = 19;
+
+  if (slotStart.hour < startHour) return false;
+
+  const businessEnd = slotStart.set({ hour: endHour, minute: 0, second: 0, millisecond: 0 });
+  const slotEnd = slotStart.plus({ minutes: durationMinutes });
+
+  if (slotEnd > businessEnd) return false;
+
+  return true;
+}
+
+function buildWeekDays(weekOffset: number): WeekDay[] {
+  const now = DateTime.now().setZone(BUSINESS_TZ).startOf("day");
+  const daysSinceSunday = now.weekday % 7;
+  const startOfWeek = now.minus({ days: daysSinceSunday }).plus({ days: weekOffset * 7 });
+
+  const out: WeekDay[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = startOfWeek.plus({ days: i });
+    out.push({
+      iso: d.toISODate()!,
+      labelTop: d.toFormat("ccc"),
+      labelBottom: d.toFormat("LLL d"),
+    });
+  }
+  return out;
+}
+
+function formatWeekRange(days: WeekDay[]): string {
+  if (days.length !== 7) return "";
+  const a = DateTime.fromISO(days[0].iso, { zone: BUSINESS_TZ });
+  const b = DateTime.fromISO(days[6].iso, { zone: BUSINESS_TZ });
+  return `${a.toFormat("ccc, LLL d")} - ${b.toFormat("ccc, LLL d")}`;
+}
+
+function generateTimeSlotsForISO(dateISO: string): string[] {
+  const day = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ });
+  const isWeekend = day.weekday === 6 || day.weekday === 7;
+
+  const startHour = isWeekend ? 10 : 9;
+  const endHour = 19;
+
+  const start = day.set({ hour: startHour, minute: 0, second: 0, millisecond: 0 });
+  const end = day.set({ hour: endHour, minute: 0, second: 0, millisecond: 0 });
+
+  const slots: string[] = [];
+  for (let t = start; t < end; t = t.plus({ minutes: 15 })) {
+    slots.push(t.toFormat("h:mm a"));
+  }
+  return slots;
+}
+
 const BookingPage: React.FC = () => {
-  const { user, addAppointment, register, appointments } = useAuth() as any;
+  const { user, addAppointment, register, appointments, assessmentScores } = useAuth() as any;
+  const scores = Array.isArray(assessmentScores) ? assessmentScores : [];
   const appts = Array.isArray(appointments) ? appointments : [];
 
   const navigate = useNavigate();
   const { showNotification } = useNotification();
 
-  // Service selection now uses UUIDs from DB
   const [selectedServiceId, setSelectedServiceId] = useState<string>("");
+  const [selectedDate, setSelectedDate] = useState<string>(""); // ISO YYYY-MM-DD
+  const [selectedTime, setSelectedTime] = useState<string>(""); // "h:mm AM/PM"
 
-  const [selectedDate, setSelectedDate] = useState<string>("");
-  const [selectedTime, setSelectedTime] = useState<string>("");
   const [currentWeek, setCurrentWeek] = useState<number>(0);
+  const weekDays = useMemo(() => buildWeekDays(currentWeek), [currentWeek]);
+  const timeSlots = useMemo(
+    () => (weekDays[0]?.iso ? generateTimeSlotsForISO(weekDays[0].iso) : []),
+    [weekDays]
+  );
+
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const weekDates = useMemo(() => generateWeekDates(currentWeek), [currentWeek]);
 
   const [services, setServices] = useState<Service[]>([]);
   const [servicesLoading, setServicesLoading] = useState<boolean>(true);
@@ -77,7 +197,7 @@ const BookingPage: React.FC = () => {
     goals: "",
   });
 
-  // Load services from DB
+  // Load services
   useEffect(() => {
     let cancelled = false;
 
@@ -99,16 +219,14 @@ const BookingPage: React.FC = () => {
     };
   }, []);
 
-  // Selected service object
   const selectedService = useMemo(
     () => services.find((s) => s.id === selectedServiceId) ?? null,
     [services, selectedServiceId]
   );
 
-  // Group services by category for UI
+  // Group services for UI
   const appointmentGroups: AppointmentGroup[] = useMemo(() => {
     const byCategory = new Map<string, Service[]>();
-
     for (const s of services) {
       const cat = s.category || "Other";
       byCategory.set(cat, [...(byCategory.get(cat) ?? []), s]);
@@ -116,9 +234,7 @@ const BookingPage: React.FC = () => {
 
     return Array.from(byCategory.entries()).map(([category, svcs]) => {
       const sorted = [...svcs].sort(
-        (a, b) =>
-          (a.sort_order ?? 0) - (b.sort_order ?? 0) ||
-          a.name.localeCompare(b.name)
+        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name)
       );
 
       return {
@@ -137,16 +253,21 @@ const BookingPage: React.FC = () => {
     });
   }, [services]);
 
-  // This uses either joined service OR legacy snapshot for backwards compatibility
+  const hasStress = useMemo(() => scores.some((s: any) => s.type === "stress"), [scores]);
+  const hasLiteracy = useMemo(() => scores.some((s: any) => s.type === "literacy"), [scores]);
+
+  const canBookInitial = useMemo(() => {
+    if (!user) return false;
+    return !!user.consentSigned && hasStress && hasLiteracy;
+  }, [user, hasStress, hasLiteracy]);
+
   const hasBookedInitialConsult = useMemo(() => {
     return appts.some((apt: any) => {
-      const isInitial =
-        !!apt?.service?.is_initial || apt?.service_type === "Initial Consultation";
+      const isInitial = !!apt?.service?.is_initial || apt?.service_type === "Initial Consultation";
       return isInitial && (apt.status === "scheduled" || apt.status === "completed");
     });
   }, [appts]);
 
-  // Pre-fill form when logged in
   useEffect(() => {
     if (!user) return;
     setFormData((prev) => ({
@@ -159,7 +280,7 @@ const BookingPage: React.FC = () => {
     }));
   }, [user]);
 
-  // Compute eligibility (onboarding) for logged-in users
+  // eligibility
   useEffect(() => {
     let cancelled = false;
 
@@ -184,25 +305,41 @@ const BookingPage: React.FC = () => {
 
   const handleServiceSelect = (serviceUUID: string) => {
     const picked = services.find((s) => s.id === serviceUUID) ?? null;
+    if (!picked) return;
 
-    if (user && picked) {
-      if (picked.is_initial && hasBookedInitialConsult) {
-        showNotification("You have already booked an Initial Consultation.", "error");
+    if (!user) {
+      setSelectedServiceId(serviceUUID);
+      setSelectedDate("");
+      setSelectedTime("");
+      return;
+    }
+
+    if (picked.is_initial && hasBookedInitialConsult) {
+      showNotification("You have already booked an Initial Consultation.", "error");
+      return;
+    }
+
+    if (picked.is_initial && !canBookInitial) {
+      showNotification(
+        "Before booking the Initial Consultation, please complete the consent form and both assessments (Stress + Literacy).",
+        "error"
+      );
+      navigate("/consent");
+      return;
+    }
+
+    const needsOnboarding = true; // your default
+    if (!picked.is_initial && needsOnboarding) {
+      if (eligibilityLoading) {
+        showNotification("Checking your onboarding status… try again in a moment.", "error");
         return;
       }
-
-      if (!picked.is_initial) {
-        if (eligibilityLoading) {
-          showNotification("Checking your onboarding status… try again in a moment.", "error");
-          return;
-        }
-        if (!canBookRegular) {
-          showNotification(
-            "Please complete onboarding (consent + both assessments + initial consultation) before booking other sessions.",
-            "error"
-          );
-          return;
-        }
+      if (!canBookRegular) {
+        showNotification(
+          "Please complete onboarding (consent + both assessments + initial consultation) before booking this session.",
+          "error"
+        );
+        return;
       }
     }
 
@@ -211,148 +348,61 @@ const BookingPage: React.FC = () => {
     setSelectedTime("");
   };
 
-  const getDurationMinutesForSelectedService = () => {
-    return selectedService?.duration_minutes ?? 30;
-  };
+  const getDurationMinutesForSelectedService = () => selectedService?.duration_minutes ?? 30;
 
-  function generateWeekDates(weekOffset: number) {
-    const today = new Date();
-    const startOfWeek = new Date(today);
-    startOfWeek.setHours(0, 0, 0, 0);
-    const dayOfWeek = today.getDay(); // Sunday = 0
-    startOfWeek.setDate(today.getDate() - dayOfWeek + weekOffset * 7);
-
-    const dates: Date[] = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(startOfWeek);
-      d.setDate(startOfWeek.getDate() + i);
-      dates.push(d);
-    }
-    return dates;
-  }
-
-  // Load availability
+  // Load availability for current week (parallel)
   useEffect(() => {
     let cancelled = false;
 
-    const fetchAvailability = async () => {
-      const data: Record<string, DayAvailability> = {};
+    (async () => {
+      const days = weekDays.map((d) => d.iso);
 
-      for (const date of weekDates) {
-        const isoDate = toISODateLocal(date);
-        try {
-          const res = await db.getAvailabilityForDate(isoDate); // { booked, blocked }
-          data[isoDate] = {
+      const results = await Promise.allSettled(
+        days.map(async (iso) => {
+          const res = await db.getAvailabilityForDate(iso);
+          return {
+            iso,
             booked: Array.isArray(res?.booked) ? res.booked : [],
             blocked: Array.isArray(res?.blocked) ? res.blocked : [],
-          };
-        } catch (e) {
-          console.error("getAvailabilityForDate failed:", isoDate, e);
-          data[isoDate] = { booked: [], blocked: [] };
+          } as const;
+        })
+      );
+
+      const next: Record<string, DayAvailability> = {};
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          next[r.value.iso] = { booked: r.value.booked, blocked: r.value.blocked };
+        } else {
+          // if one day fails, don't kill the whole week
+          console.error("getAvailabilityForDate failed:", r.reason);
+          // best effort: keep empty
+          // (optional: if you want to preserve previous data for that day, handle that here)
         }
       }
 
-      if (!cancelled) setAvailability(data);
-    };
+      if (!cancelled) setAvailability(next);
+    })();
 
-    void fetchAvailability();
     return () => {
       cancelled = true;
     };
-  }, [weekDates]);
+  }, [weekDays]);
 
-  const parseTimeString = (timeStr: string) => {
-    const [time, modifier] = timeStr.split(" ");
-    let [hours, minutes] = time.split(":").map(Number);
-    if (hours === 12 && modifier === "AM") hours = 0;
-    if (modifier === "PM" && hours < 12) hours += 12;
-    return { hours, minutes };
-  };
 
-  const formatTimeLabel = (hours24: number, minutes: number) => {
-    const ampm = hours24 >= 12 ? "PM" : "AM";
-    let h12 = hours24 % 12;
-    if (h12 === 0) h12 = 12;
-    const mm = String(minutes).padStart(2, "0");
-    return `${h12}:${mm} ${ampm}`;
-  };
-
-  const addMinutesToLabel = (timeStr: string, addMin: number) => {
-    const { hours, minutes } = parseTimeString(timeStr);
-    const base = new Date(2000, 0, 1, hours, minutes, 0, 0);
-    const t = new Date(base.getTime() + addMin * 60000);
-    return formatTimeLabel(t.getHours(), t.getMinutes());
-  };
-
-  const calculateEndTime = (startTimeStr: string, durationMinutes: number) => {
-    if (!startTimeStr || !Number.isFinite(durationMinutes)) return "";
-    const { hours, minutes } = parseTimeString(startTimeStr);
-
-    const startTime = new Date();
-    startTime.setHours(hours, minutes, 0, 0);
-    const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
-
-    return endTime.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  };
-
-  const getBusinessWindow = (date: Date) => {
-    const day = date.getDay();
-    const isWeekend = day === 0 || day === 6;
-
-    const startHour = isWeekend ? 10 : 9;
-    const endHour = 19;
-
-    const start = new Date(date);
-    start.setHours(startHour, 0, 0, 0);
-
-    const end = new Date(date);
-    end.setHours(endHour, 0, 0, 0);
-
-    return { start, end };
-  };
-
-  const passesCutoffAndHours = (date: Date, timeStr: string, durationMinutes: number) => {
-    const { hours, minutes } = parseTimeString(timeStr);
-    const slotStart = new Date(date);
-    slotStart.setHours(hours, minutes, 0, 0);
-
-    const bookingCutoff = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    if (slotStart <= bookingCutoff) return false;
-
-    const { end: businessEnd } = getBusinessWindow(date);
-    const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60000);
-    if (slotEnd > businessEnd) return false;
-
-    return true;
-  };
-
-  const isPastSlot = (date: Date, timeStr: string) => {
-    const { hours, minutes } = parseTimeString(timeStr);
-    const slotStart = new Date(date);
-    slotStart.setHours(hours, minutes, 0, 0);
-    return slotStart.getTime() < Date.now();
-  };
-
-  const getSlotState = (date: Date, startLabel: string): SlotState => {
+  const getSlotState = (dateISO: string, startLabel: string): SlotState => {
     if (!selectedServiceId) return "blocked"; // until service selected
-
-    if (isPastSlot(date, startLabel)) return "passed";
-
-    const isoDate = toISODateLocal(date);
-    const day = availability[isoDate] ?? { booked: [], blocked: [] };
-
-    const bookedSet = new Set(day.booked);
-    const blockedSet = new Set(day.blocked);
 
     const durationMinutes = getDurationMinutesForSelectedService();
 
+    if (isPastSlot(dateISO, startLabel)) return "passed";
+
+    const day = availability[dateISO] ?? { booked: [], blocked: [] };
+    const bookedSet = new Set(day.booked);
+    const blockedSet = new Set(day.blocked);
+
     if (bookedSet.has(startLabel)) return "booked";
 
-    if (!passesCutoffAndHours(date, startLabel, durationMinutes)) return "blocked";
+    if (!passesCutoffAndHours(dateISO, startLabel, durationMinutes)) return "blocked";
 
     const blocksNeeded = Math.ceil(durationMinutes / 15);
     for (let i = 0; i < blocksNeeded; i++) {
@@ -363,30 +413,19 @@ const BookingPage: React.FC = () => {
     return "available";
   };
 
-  const getRangeLabel = (date: Date, startLabel: string, durationMinutes: number) => {
-    const { hours, minutes } = parseTimeString(startLabel);
-    const startDT = new Date(date);
-    startDT.setHours(hours, minutes, 0, 0);
-
-    const endDT = new Date(startDT.getTime() + durationMinutes * 60000);
-
-    const endLabel = endDT.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
+  const getRangeLabel = (dateISO: string, startLabel: string, durationMinutes: number) => {
+    const { hours, minutes } = parseTime12h(startLabel);
+    const start = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ }).set({
+      hour: hours,
+      minute: minutes,
+      second: 0,
+      millisecond: 0,
     });
-
-    return `${startLabel}–${endLabel}`;
+    const end = start.plus({ minutes: durationMinutes });
+    return `${startLabel}–${end.toFormat("h:mm a")}`;
   };
 
-  const formatDate = (date: Date) =>
-    date.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
-
-  const formatWeekRange = (dates: Date[]) => `${formatDate(dates[0])} - ${formatDate(dates[6])}`;
-
-  const handleInputChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
-  ) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
@@ -394,8 +433,12 @@ const BookingPage: React.FC = () => {
   const renderBookingSummary = () => {
     if (!selectedService || !selectedTime) return null;
 
-    const endTimeFormatted = calculateEndTime(selectedTime, selectedService.duration_minutes);
+    const endTimeFormatted = calculateEndTimeLabel(selectedTime, selectedService.duration_minutes);
     const timeRange = endTimeFormatted ? `${selectedTime} - ${endTimeFormatted}` : selectedTime;
+
+    const dateLabel = selectedDate
+      ? DateTime.fromISO(selectedDate, { zone: BUSINESS_TZ }).toFormat("cccc, LLLL d, yyyy")
+      : "";
 
     return (
       <div className="space-y-1 text-base">
@@ -405,14 +448,7 @@ const BookingPage: React.FC = () => {
         </p>
         <p>
           <span className="text-black">Date:</span>{" "}
-          <span className="text-gray-600">
-            {new Date(selectedDate).toLocaleDateString("en-CA", {
-              weekday: "long",
-              year: "numeric",
-              month: "long",
-              day: "numeric",
-            })}
-          </span>
+          <span className="text-gray-600">{dateLabel}</span>
         </p>
         <p>
           <span className="text-black">Time:</span>{" "}
@@ -447,29 +483,28 @@ const BookingPage: React.FC = () => {
           showNotification("Please fill out all required fields.", "error");
           return;
         }
-
         if (password !== confirmPassword) {
           showNotification("Passwords do not match.", "error");
           return;
         }
 
-        const newUser = await register({
-          firstName,
-          lastName,
-          email,
+        const created = await register({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          email: email.trim(),
           password,
           age: parseInt(age, 10),
-          phone,
+          phone: phone.trim(),
         });
 
-        if (!newUser) {
-          showNotification(
-            "An account with this email may already exist. Please try logging in.",
-            "error"
-          );
+        if (!created) {
+          showNotification("That email may already be registered. Try logging in instead.", "error");
           return;
         }
-        finalUser = newUser;
+
+        showNotification("Account created! Please sign in to book.", "success");
+        navigate(`/login?email=${encodeURIComponent(email.trim())}`, { replace: true });
+        return;
       }
 
       if (!finalUser) {
@@ -479,7 +514,7 @@ const BookingPage: React.FC = () => {
 
       await addAppointment({
         user_id: finalUser.id,
-        service_id: selectedServiceId, // ✅ UUID
+        service_id: selectedServiceId,
         date: selectedDate,
         time: selectedTime,
         notes: formData.goals || null,
@@ -499,14 +534,11 @@ const BookingPage: React.FC = () => {
         msg.toLowerCase().includes("permission")
       ) {
         showNotification(
-          "You can’t book this session yet. Please finish onboarding (consent + assessments + initial consultation).",
+          "You can’t book yet. Please complete the consent form and both assessments first. After your Initial Consultation is completed, you’ll be able to book other sessions.",
           "error"
         );
       } else {
-        showNotification(
-          "Booking failed. That time may have just been taken—please pick another.",
-          "error"
-        );
+        showNotification("Booking failed. That time may have just been taken—please pick another.", "error");
       }
     } finally {
       setIsSubmitting(false);
@@ -536,14 +568,8 @@ const BookingPage: React.FC = () => {
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-12">
           <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-6">Book Your Session</h1>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            Schedule your personalized financial coaching session.
-          </p>
-          {user && (
-            <p className="mt-2 text-gray-600">
-              Welcome back, {user.firstName}! Your information is pre-filled below.
-            </p>
-          )}
+          <p className="text-xl text-gray-600 max-w-2xl mx-auto">Schedule your personalized financial coaching session.</p>
+          {user && <p className="mt-2 text-gray-600">Welcome back, {user.firstName}! Your information is pre-filled below.</p>}
         </div>
 
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
@@ -557,9 +583,7 @@ const BookingPage: React.FC = () => {
               {servicesLoading ? (
                 <div className="text-sm text-gray-600">Loading services…</div>
               ) : services.length === 0 ? (
-                <div className="text-sm text-red-600">
-                  No services found. Add services in the admin database first.
-                </div>
+                <div className="text-sm text-red-600">No services found. Add services in the admin database first.</div>
               ) : (
                 <div className="space-y-4">
                   {appointmentGroups.map((group) => (
@@ -569,9 +593,7 @@ const BookingPage: React.FC = () => {
                           <label
                             key={service.id}
                             className={`block p-4 cursor-pointer transition-colors rounded-lg ${
-                              selectedServiceId === service.id
-                                ? "border-grima-primary bg-grima-50 border-2"
-                                : "hover:bg-gray-50"
+                              selectedServiceId === service.id ? "border-grima-primary bg-grima-50 border-2" : "hover:bg-gray-50"
                             }`}
                           >
                             <input
@@ -585,15 +607,11 @@ const BookingPage: React.FC = () => {
                             <div className="flex justify-between items-center">
                               <h3 className="font-semibold text-gray-900 flex items-center">
                                 {service.name}{" "}
-                                <span className="text-sm text-gray-500 ml-2 font-normal">
-                                  ({service.duration})
-                                </span>
+                                <span className="text-sm text-gray-500 ml-2 font-normal">({service.duration})</span>
                               </h3>
                               <span className="font-bold text-grima-primary">{service.price}</span>
                             </div>
-                            {service.description && (
-                              <p className="text-sm text-gray-600 mt-1">{service.description}</p>
-                            )}
+                            {service.description && <p className="text-sm text-gray-600 mt-1">{service.description}</p>}
                           </label>
                         ))
                       ) : (
@@ -620,9 +638,7 @@ const BookingPage: React.FC = () => {
                                 <div className="flex justify-between items-center">
                                   <div>
                                     <span className="font-medium">{option.name}</span>
-                                    <span className="text-sm text-gray-500 ml-2">
-                                      ({option.duration})
-                                    </span>
+                                    <span className="text-sm text-gray-500 ml-2">({option.duration})</span>
                                   </div>
                                   <span className="font-semibold">{option.price}</span>
                                 </div>
@@ -644,9 +660,7 @@ const BookingPage: React.FC = () => {
                     <Calendar className="h-6 w-6 text-grima-primary mr-2" />
                     Select Date & Time
                   </h2>
-                  <p className="text-xs text-gray-500">
-                    Sessions must be booked at least 24 hours in advance.
-                  </p>
+                  <p className="text-xs text-gray-500">Sessions must be booked at least 24 hours in advance.</p>
                 </div>
 
                 <p className="text-sm text-gray-600 mb-4">
@@ -654,16 +668,18 @@ const BookingPage: React.FC = () => {
                   <span className="font-semibold">{selectedDurationMinutes}</span> minutes.
                 </p>
 
-                {/* Legend */}
                 <div className="flex flex-wrap gap-3 text-xs text-gray-700 mb-6">
                   <span className="inline-flex items-center gap-2">
                     <span className="w-3 h-3 rounded bg-grima-100 inline-block border" /> Available
                   </span>
                   <span className="inline-flex items-center gap-2">
-                    <span className="w-3 h-3 rounded bg-yellow-50 inline-block border" /> Blocked (would overlap)
+                    <span className="w-3 h-3 rounded bg-yellow-50 inline-block border" /> Blocked (overlap)
                   </span>
                   <span className="inline-flex items-center gap-2">
                     <span className="w-3 h-3 rounded bg-gray-100 inline-block border" /> Booked
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <span className="w-3 h-3 rounded bg-slate-100 inline-block border" /> Passed
                   </span>
                 </div>
 
@@ -678,9 +694,7 @@ const BookingPage: React.FC = () => {
                     Previous Week
                   </button>
 
-                  <h3 className="text-lg font-semibold text-gray-900 text-center">
-                    {formatWeekRange(weekDates)}
-                  </h3>
+                  <h3 className="text-lg font-semibold text-gray-900 text-center">{formatWeekRange(weekDays)}</h3>
 
                   <button
                     onClick={() => setCurrentWeek((w) => w + 1)}
@@ -696,39 +710,32 @@ const BookingPage: React.FC = () => {
                   <div className="border border-gray-200 rounded-lg inline-block min-w-full">
                     <div className="grid grid-cols-8 bg-gray-50">
                       <div className="p-3 text-sm font-medium text-gray-700 border-r">Time</div>
-                      {weekDates.map((date) => (
-                        <div
-                          key={date.toISOString()}
-                          className="p-3 text-sm font-medium text-center text-gray-700 border-r last:border-r-0"
-                        >
-                          <span className="text-grima-primary">
-                            {date.toLocaleDateString("en-CA", { weekday: "short" })}
-                          </span>
+                      {weekDays.map((d) => (
+                        <div key={d.iso} className="p-3 text-sm font-medium text-center text-gray-700 border-r last:border-r-0">
+                          <span className="text-grima-primary">{d.labelTop}</span>
                           <br />
-                          {date.toLocaleDateString("en-CA", { month: "short", day: "numeric" })}
+                          {d.labelBottom}
                         </div>
                       ))}
                     </div>
 
                     <div>
-                      {generateTimeSlots(weekDates[0]).map((time: string) => (
+                      {timeSlots.map((time) => (
                         <div key={time} className="grid grid-cols-8 border-t">
-                          <div className="p-3 text-xs text-gray-600 border-r bg-gray-50 font-medium">
-                            {time}
-                          </div>
+                          <div className="p-3 text-xs text-gray-600 border-r bg-gray-50 font-medium">{time}</div>
 
-                          {weekDates.map((date) => {
-                            const iso = date.toISOString().split("T")[0];
-                            const state = getSlotState(date, time);
+                          {weekDays.map((d) => {
+                            const iso = d.iso;
+                            const state = getSlotState(iso, time);
 
                             const inRange = isInSelectedRange(iso, time);
                             const isStart = selectedDate === iso && selectedTime === time;
 
                             const durationMinutes = getDurationMinutesForSelectedService();
-                            const rangeLabel = getRangeLabel(date, time, durationMinutes);
+                            const rangeLabel = getRangeLabel(iso, time, durationMinutes);
 
                             return (
-                              <div key={date.toISOString()} className="border-r last:border-r-0">
+                              <div key={iso} className="border-r last:border-r-0">
                                 {state === "booked" ? (
                                   <div className="w-full h-12 bg-gray-100 flex items-center justify-center">
                                     <span className="text-gray-500 text-xs">Booked</span>
@@ -772,10 +779,7 @@ const BookingPage: React.FC = () => {
                                     <span className="text-slate-500 text-xs">Passed</span>
                                   </div>
                                 ) : (
-                                  <div
-                                    className="w-full h-12 bg-yellow-50 flex items-center justify-center"
-                                    title="This start time would overlap another booking or blocked time."
-                                  >
+                                  <div className="w-full h-12 bg-yellow-50 flex items-center justify-center" title="Overlaps another booking or blocked time.">
                                     <span className="text-yellow-800 text-xs">Blocked</span>
                                   </div>
                                 )}
@@ -793,9 +797,7 @@ const BookingPage: React.FC = () => {
             {selectedDate && selectedTime && (
               <form onSubmit={handleSubmit} noValidate>
                 <div className="pt-8 border-t">
-                  <h2 className="text-2xl font-bold text-gray-900 mb-4">
-                    {user ? "Confirm Your Information" : "Create Your Account & Book"}
-                  </h2>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-4">{user ? "Confirm Your Information" : "Create Your Account & Book"}</h2>
 
                   <div className="mb-8 p-6 bg-grima-50 rounded-lg">
                     <h3 className="text-xl font-bold text-gray-900 mb-4">Booking Summary</h3>
@@ -803,43 +805,11 @@ const BookingPage: React.FC = () => {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                    <InputField
-                      label="First Name *"
-                      name="firstName"
-                      value={formData.firstName}
-                      onChange={handleInputChange}
-                      disabled={!!user}
-                    />
-                    <InputField
-                      label="Last Name *"
-                      name="lastName"
-                      value={formData.lastName}
-                      onChange={handleInputChange}
-                      disabled={!!user}
-                    />
-                    <InputField
-                      label="Email *"
-                      name="email"
-                      type="email"
-                      value={formData.email}
-                      onChange={handleInputChange}
-                      disabled={!!user}
-                    />
-                    <InputField
-                      label="Phone Number *"
-                      name="phone"
-                      type="tel"
-                      value={formData.phone}
-                      onChange={handleInputChange}
-                    />
-                    <InputField
-                      label="Age *"
-                      name="age"
-                      type="select"
-                      value={formData.age}
-                      onChange={handleInputChange}
-                      disabled={!!user}
-                    >
+                    <InputField label="First Name *" name="firstName" value={formData.firstName} onChange={handleInputChange} disabled={!!user} />
+                    <InputField label="Last Name *" name="lastName" value={formData.lastName} onChange={handleInputChange} disabled={!!user} />
+                    <InputField label="Email *" name="email" type="email" value={formData.email} onChange={handleInputChange} disabled={!!user} />
+                    <InputField label="Phone Number *" name="phone" type="tel" value={formData.phone} onChange={handleInputChange} />
+                    <InputField label="Age *" name="age" type="select" value={formData.age} onChange={handleInputChange} disabled={!!user}>
                       <option value="">Select age</option>
                       {Array.from({ length: 11 }, (_, i) => i + 15).map((age) => (
                         <option key={age} value={age}>
@@ -858,12 +828,7 @@ const BookingPage: React.FC = () => {
                         value={formData.password}
                         onChange={handleInputChange}
                         minLength={6}
-                        icon={
-                          <Lock
-                            size={16}
-                            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-                          />
-                        }
+                        icon={<Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />}
                       />
                       <InputField
                         label="Confirm Password *"
@@ -871,20 +836,13 @@ const BookingPage: React.FC = () => {
                         type="password"
                         value={formData.confirmPassword}
                         onChange={handleInputChange}
-                        icon={
-                          <Lock
-                            size={16}
-                            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-                          />
-                        }
+                        icon={<Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />}
                       />
                     </div>
                   )}
 
                   <div className="mb-8">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      What are your main financial goals? (Optional)
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">What are your main financial goals? (Optional)</label>
                     <textarea
                       name="goals"
                       value={formData.goals}
@@ -903,8 +861,7 @@ const BookingPage: React.FC = () => {
                       <div>
                         <p className="font-bold">Payment Information</p>
                         <p className="text-sm">
-                          No upfront payment is required. Payment will be arranged at the end of your coaching session
-                          (if applicable).
+                          No upfront payment is required. Payment will be arranged at the end of your coaching session (if applicable).
                         </p>
                       </div>
                     </div>
@@ -946,9 +903,7 @@ const InputField: React.FC<InputFieldProps> = ({ label, type = "text", children,
         {isSelect ? (
           <select
             {...(props as any)}
-            className={`w-full p-3 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 ${
-              icon ? "pl-10" : ""
-            }`}
+            className={`w-full p-3 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 ${icon ? "pl-10" : ""}`}
           >
             {children}
           </select>
@@ -956,9 +911,7 @@ const InputField: React.FC<InputFieldProps> = ({ label, type = "text", children,
           <input
             type={type}
             {...(props as any)}
-            className={`w-full p-3 border border-gray-300 rounded-lg disabled:bg-gray-100 ${
-              icon ? "pl-10" : ""
-            }`}
+            className={`w-full p-3 border border-gray-300 rounded-lg disabled:bg-gray-100 ${icon ? "pl-10" : ""}`}
           />
         )}
       </div>

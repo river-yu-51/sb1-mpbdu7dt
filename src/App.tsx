@@ -12,6 +12,7 @@ import GroupSessionsPage from "./pages/GroupSessionsPage";
 import BookingPage from "./pages/BookingPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import AuthCallback from "./pages/AuthCallback";
 import AccountPage from "./pages/AccountPage";
 import AdminPage from "./pages/AdminPage";
 import AdminServicesPage from "./pages/AdminServicesPage";
@@ -46,6 +47,7 @@ function App() {
               <Route path="/admin/services" element={<AdminServicesPage />} />
               <Route path="/assessments" element={<AssessmentsPage />} />
               <Route path="/consent" element={<ConsentFormPage />} />
+              <Route path="/auth/callback" element={<AuthCallback />} />
             </Routes>
           </main>
           <Footer />

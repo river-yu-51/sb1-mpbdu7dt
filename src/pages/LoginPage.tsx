@@ -4,6 +4,18 @@ import { Eye, EyeOff, Lock, LogIn, Mail } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
 
+const looksUnverifiedError = (msg: string) => {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("confirm") ||
+    m.includes("confirmed") ||
+    m.includes("verify") ||
+    m.includes("verification") ||
+    m.includes("not confirmed") ||
+    m.includes("email not confirmed")
+  );
+};
+
 const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -11,13 +23,32 @@ const LoginPage: React.FC = () => {
 
   const qs = new URLSearchParams(location.search);
   const initialEmail = qs.get("email") ?? "";
+  const verifiedParam = qs.get("verified"); // from /auth/callback -> /login?verified=1 or 0
+  const verifyHint = qs.get("verify"); // from register -> /login?...&verify=1
 
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
+
+  // split "error" vs "info" for nicer UX
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const [showResend, setShowResend] = useState(false);
+  const [resending, setResending] = useState(false);
+
+  // Show banners based on query params
+  useEffect(() => {
+    if (verifiedParam === "1") {
+      setInfo("Email verified! You can sign in now.");
+    } else if (verifiedParam === "0") {
+      setInfo("Verification link expired or invalid. Please try signing in or resend verification.");
+    } else if (verifyHint === "1") {
+      setInfo("Account created. Check your email to verify, then come back here to sign in.");
+    }
+  }, [verifiedParam, verifyHint]);
 
   // Redirect when AuthContext has actually set the user
   useEffect(() => {
@@ -29,12 +60,47 @@ const LoginPage: React.FC = () => {
     [email, password, submitting]
   );
 
+  const resendVerification = async () => {
+    const e = email.trim();
+    if (!e) {
+      setError("Enter your email first, then click resend.");
+      return;
+    }
+
+    setResending(true);
+    setError(null);
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: e,
+        options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      });
+
+      if (error) {
+        console.error("[resend] error:", error);
+        setError(error.message || "Could not resend verification email.");
+        return;
+      }
+
+      setInfo("Verification email sent. Check your inbox (and spam).");
+      setShowResend(false);
+    } catch (err: any) {
+      console.error("[resend] exception:", err);
+      setError(err?.message || "Could not resend verification email.");
+    } finally {
+      setResending(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
 
     setSubmitting(true);
     setError(null);
+    setInfo(null);
+    setShowResend(false);
 
     try {
       const loginPromise = login(email, password);
@@ -46,10 +112,12 @@ const LoginPage: React.FC = () => {
       ]);
 
       if (result === "resolved") {
-        // login() finished normally (true/false handled below)
-        const ok = await loginPromise; // reuse result safely
+        const ok = await loginPromise;
         if (!ok) {
+          // Try to detect "unverified" by inspecting the last auth error via session check
+          // (Your login() currently only returns boolean, so we can’t read the error directly.)
           setError("Invalid email or password.");
+          setShowResend(true); // still useful if they typed right creds but aren't verified
           return;
         }
         navigate("/account");
@@ -61,21 +129,25 @@ const LoginPage: React.FC = () => {
       const { data } = await supabase.auth.getSession();
 
       if (data.session?.user) {
-        console.log("[login-page] session exists after slow login; redirecting");
         navigate("/account");
         return;
       }
 
-      // No session -> real failure (or network issue)
       setError("Sign-in is taking too long. Please try again.");
     } catch (err: any) {
       console.error("[login-page] error:", err);
-      setError(err?.message || "Login failed. Please try again.");
+      const msg = String(err?.message || "Login failed. Please try again.");
+
+      if (looksUnverifiedError(msg)) {
+        setError("Please verify your email before signing in.");
+        setShowResend(true);
+      } else {
+        setError(msg);
+      }
     } finally {
       setSubmitting(false);
     }
   };
-
 
   return (
     <div className="py-20 bg-grima-50 min-h-screen">
@@ -87,9 +159,32 @@ const LoginPage: React.FC = () => {
             <p className="text-gray-600">Sign in to access your account and session notes</p>
           </div>
 
+          {info && (
+            <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg mb-6">
+              {info}
+            </div>
+          )}
+
           {(error || (submitting && isLoading)) && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
               {error ?? "Signing you in…"}
+            </div>
+          )}
+
+          {showResend && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg mb-6">
+              <div className="font-semibold mb-1">Need a new verification email?</div>
+              <div className="text-sm mb-3">
+                Enter your email above, then click resend. Check spam/junk too.
+              </div>
+              <button
+                type="button"
+                onClick={resendVerification}
+                disabled={resending || !email.trim()}
+                className="px-4 py-2 rounded-lg bg-grima-primary text-white font-semibold hover:bg-grima-dark disabled:opacity-50"
+              >
+                {resending ? "Resending…" : "Resend verification email"}
+              </button>
             </div>
           )}
 
@@ -104,6 +199,8 @@ const LoginPage: React.FC = () => {
                   onChange={(e) => {
                     setEmail(e.target.value);
                     setError(null);
+                    // keep info banner unless user starts editing; optional:
+                    // setInfo(null);
                   }}
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-grima-primary focus:border-transparent"
                   autoComplete="email"

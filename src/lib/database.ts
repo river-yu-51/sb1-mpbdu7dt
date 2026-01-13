@@ -1,4 +1,7 @@
+// src/lib/database.ts
 import { supabase } from "./supabase";
+import { DateTime } from "luxon";
+import { BUSINESS_TZ, dayRangeInstantISO } from "./time";
 
 /** =========================
  *  Types (match DB schema)
@@ -54,6 +57,14 @@ export interface Service {
   updated_at: string;
 }
 
+/** NEW: prerequisites rows (service_prerequisites table) */
+export interface ServicePrerequisite {
+  service_id: string;
+  prereq_service_id: string;
+  required_status: "completed" | "scheduled_or_completed";
+  created_at?: string;
+}
+
 export interface SessionNote {
   id: string;
   appointment_id: string;
@@ -70,8 +81,8 @@ export interface Appointment {
   service_id: string | null; // uuid
   service_type?: string; // legacy (name)
 
-  start_time: string;
-  end_time: string;
+  start_time: string; // timestamptz ISO
+  end_time: string;   // timestamptz ISO
   status: "scheduled" | "completed" | "cancelled";
   notes: string | null;
   created_at: string;
@@ -104,39 +115,75 @@ export interface AvailabilityBlock {
  *  UI helpers
  *  ========================= */
 
-export const generateTimeSlots = (date: Date) => {
-  const dayOfWeek = date.getDay();
-  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+/**
+ * IMPORTANT:
+ * Your UI uses "time labels" like "9:00 AM". Those are BUSINESS_TZ labels.
+ * These helpers generate and interpret labels consistently in BUSINESS_TZ.
+ */
+
+export function toISODateLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function labelFromDT(dt: DateTime): string {
+  // Always format in BUSINESS_TZ
+  return dt.setZone(BUSINESS_TZ).toFormat("h:mm a");
+}
+
+/**
+ * Generate 15-min slots for a BUSINESS_TZ day, returned as labels like "9:00 AM".
+ * Prefer calling this with a YYYY-MM-DD string for correctness.
+ */
+export function generateTimeSlotsForISO(dateISO: string): string[] {
+  const day = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ });
+  const isWeekend = day.weekday === 6 || day.weekday === 7; // Sat/Sun
 
   const startHour = isWeekend ? 10 : 9;
   const endHour = 19;
 
-  const slots: string[] = [];
+  const start = day.set({ hour: startHour, minute: 0, second: 0, millisecond: 0 });
+  const end = day.set({ hour: endHour, minute: 0, second: 0, millisecond: 0 });
 
-  const start = new Date(date);
-  start.setHours(startHour, 0, 0, 0);
-
-  const end = new Date(date);
-  end.setHours(endHour, 0, 0, 0);
-
-  for (let t = new Date(start); t < end; t = new Date(t.getTime() + 15 * 60 * 1000)) {
-    const hours = t.getHours();
-    const minutes = t.getMinutes();
-    const ampm = hours >= 12 ? "PM" : "AM";
-    const h12 = ((hours + 11) % 12) + 1;
-    const mm = String(minutes).padStart(2, "0");
-    slots.push(`${h12}:${mm} ${ampm}`);
+  const out: string[] = [];
+  for (let t = start; t < end; t = t.plus({ minutes: 15 })) {
+    out.push(t.toFormat("h:mm a"));
   }
+  return out;
+}
 
-  return slots;
-};
+/**
+ * Backwards-compatible wrapper used by your pages currently.
+ * NOTE: if the Date is created in a different timezone, the day may be off.
+ * Best practice: update pages to pass ISO strings and call generateTimeSlotsForISO.
+ */
+export const generateTimeSlots = (date: Date) => generateTimeSlotsForISO(toISODateLocal(date));
 
-function parseLocalDateAndTime(dateYYYYMMDD: string, time12h: string): Date {
-  const [yearStr, monthStr, dayStr] = dateYYYYMMDD.split("-");
-  const year = Number(yearStr);
-  const month = Number(monthStr) - 1;
-  const day = Number(dayStr);
+/**
+ * Convert a (dateISO + time label) into a UTC instant ISO string.
+ */
+function slotStartUTCISO(dateISO: string, time12h: string): string {
+  const { hour, minute } = parseTimeLabel12h(time12h);
 
+  const dt = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ }).set({
+    hour,
+    minute,
+    second: 0,
+    millisecond: 0,
+  });
+
+  if (!dt.isValid) throw new Error(`Invalid slot datetime: ${dt.invalidReason}`);
+
+  return dt.toUTC().toISO()!;
+}
+
+function addMinutesUTCISO(startUTCISO: string, minutes: number): string {
+  return DateTime.fromISO(startUTCISO, { zone: "utc" }).plus({ minutes }).toISO()!;
+}
+
+function parseTimeLabel12h(time12h: string): { hour: number; minute: number } {
   const match = time12h.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
   if (!match) throw new Error(`Invalid time format: ${time12h}`);
 
@@ -147,25 +194,37 @@ function parseLocalDateAndTime(dateYYYYMMDD: string, time12h: string): Date {
   if (ampm === "PM" && hour !== 12) hour += 12;
   if (ampm === "AM" && hour === 12) hour = 0;
 
-  return new Date(year, month, day, hour, minute, 0, 0);
+  return { hour, minute };
 }
 
-export function toISODateLocal(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+function labelFromBusinessDT(dt: DateTime): string {
+  // Always format as your UI labels: "h:mm AM/PM"
+  return dt.setZone(BUSINESS_TZ).toFormat("h:mm a");
 }
+
+
+/** =========================
+ *  DB API
+ *  ========================= */
 
 export const db = {
   async getUser(email: string): Promise<User | null> {
-    const { data, error } = await supabase.from("profiles").select("*").eq("email", email).maybeSingle();
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("email", email)
+      .maybeSingle();
     if (error) throw error;
     return (data ?? null) as any;
   },
 
   async updateUser(userId: string, updateData: Partial<User>): Promise<User | null> {
-    const { data, error } = await supabase.from("profiles").update(updateData).eq("id", userId).select("*").single();
+    const { data, error } = await supabase
+      .from("profiles")
+      .update(updateData)
+      .eq("id", userId)
+      .select("*")
+      .single();
     if (error) throw error;
     return data as any;
   },
@@ -196,13 +255,21 @@ export const db = {
   async createMessage(
     messageData: Omit<Message, "id" | "status" | "created_at" | "updated_at" | "replies">
   ): Promise<Message> {
-    const { data, error } = await supabase.from("messages").insert(messageData).select("*").single();
+    const { data, error } = await supabase
+      .from("messages")
+      .insert(messageData)
+      .select("*")
+      .single();
     if (error) throw error;
     return data as any;
   },
 
   async getUserMessages(userId: string): Promise<Message[]> {
-    const { data, error } = await supabase.from("messages").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []) as any;
   },
@@ -219,14 +286,17 @@ export const db = {
 
   async addMessageReply(replyData: Omit<MessageReply, "id" | "created_at">): Promise<MessageReply> {
     const { sender_name, ...rest } = replyData as any;
-    const { data, error } = await supabase.from("message_replies").insert(rest).select("*").single();
+    const { data, error } = await supabase
+      .from("message_replies")
+      .insert(rest)
+      .select("*")
+      .single();
     if (error) throw error;
     return data as any;
   },
 
   /** -------- Appointments -------- */
 
-  // RECOMMENDED: include joined service in case UI wants it
   async getUserAppointments(userId: string): Promise<Appointment[]> {
     const { data, error } = await supabase
       .from("appointments")
@@ -250,10 +320,14 @@ export const db = {
   },
 
   async createAppointment(appointmentData: any): Promise<Appointment> {
+    // Load service if service_id provided (for duration + snapshot name)
     let service: Service | null = null;
-
     if (appointmentData.service_id) {
-      const { data, error } = await supabase.from("services").select("*").eq("id", appointmentData.service_id).maybeSingle();
+      const { data, error } = await supabase
+        .from("services")
+        .select("*")
+        .eq("id", appointmentData.service_id)
+        .maybeSingle();
       if (error) throw error;
       service = (data ?? null) as any;
       if (!service) throw new Error("Selected service not found.");
@@ -265,16 +339,21 @@ export const db = {
       service?.duration_minutes ||
       30;
 
-    const makeStartEnd = () => {
-      if (appointmentData.start_time && appointmentData.end_time) {
-        return { start_time: appointmentData.start_time, end_time: appointmentData.end_time };
-      }
-      const start = parseLocalDateAndTime(appointmentData.date, appointmentData.time);
-      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
-      return { start_time: start.toISOString(), end_time: end.toISOString() };
-    };
+    // Determine start/end (UTC) — always interpret date+time in BUSINESS_TZ
+    let start_time: string;
+    let end_time: string;
 
-    const { start_time, end_time } = makeStartEnd();
+    if (appointmentData.start_time && appointmentData.end_time) {
+      // if caller already provides ISO instants, trust them (should be UTC)
+      start_time = appointmentData.start_time;
+      end_time = appointmentData.end_time;
+    } else {
+      if (!appointmentData.date || !appointmentData.time) {
+        throw new Error("Missing appointment date/time.");
+      }
+      start_time = slotStartUTCISO(appointmentData.date, appointmentData.time);
+      end_time = addMinutesUTCISO(start_time, durationMinutes);
+    }
 
     const payload: any = {
       user_id: appointmentData.user_id,
@@ -287,23 +366,42 @@ export const db = {
       status: appointmentData.status ?? "scheduled",
     };
 
-    const { data, error } = await supabase.from("appointments").insert(payload).select("*").single();
+    const { data, error } = await supabase
+      .from("appointments")
+      .insert(payload)
+      .select("*")
+      .single();
     if (error) throw error;
     return data as any;
   },
 
   async updateAppointmentStatus(appointmentId: string, status: Appointment["status"]): Promise<void> {
-    const { error } = await supabase.from("appointments").update({ status }).eq("id", appointmentId);
+    const { error } = await supabase
+      .from("appointments")
+      .update({ status })
+      .eq("id", appointmentId);
     if (error) throw error;
   },
 
-  async rescheduleAppointment(id: string, date: string, time: string): Promise<Appointment | null> {
-    const start = parseLocalDateAndTime(date, time);
-    const end = new Date(start.getTime() + 30 * 60 * 1000);
+  async rescheduleAppointment(id: string, dateISO: string, time12h: string): Promise<Appointment | null> {
+    // Load existing appointment (join service for duration)
+    const existing = await this.getAppointmentById(id);
+    if (!existing) throw new Error("Appointment not found.");
+
+    const durationMinutes = existing.service
+      ? existing.service.duration_minutes
+      : Math.round(
+          (DateTime.fromISO(existing.end_time).toUTC().toMillis() -
+            DateTime.fromISO(existing.start_time).toUTC().toMillis()) /
+            60000
+        );
+
+    const startUTC = slotStartUTCISO(dateISO, time12h);
+    const endUTC = addMinutesUTCISO(startUTC, durationMinutes);
 
     const { data, error } = await supabase
       .from("appointments")
-      .update({ start_time: start.toISOString(), end_time: end.toISOString() })
+      .update({ start_time: startUTC, end_time: endUTC })
       .eq("id", id)
       .select("*")
       .single();
@@ -315,14 +413,21 @@ export const db = {
   /** -------- Services -------- */
 
   async getServices(activeOnly = true): Promise<Service[]> {
-    let q = supabase.from("services").select("*").order("category").order("sort_order").order("name");
+    let q = supabase
+      .from("services")
+      .select("*")
+      .order("category")
+      .order("sort_order")
+      .order("name");
     if (activeOnly) q = q.eq("is_active", true);
     const { data, error } = await q;
     if (error) throw error;
     return (data ?? []) as any;
   },
 
-  async upsertService(service: Partial<Service> & Pick<Service, "name" | "category" | "duration_minutes">): Promise<Service> {
+  async upsertService(
+    service: Partial<Service> & Pick<Service, "name" | "category" | "duration_minutes">
+  ): Promise<Service> {
     const { data, error } = await supabase.from("services").upsert(service).select("*").single();
     if (error) throw error;
     return data as any;
@@ -333,9 +438,43 @@ export const db = {
     if (error) throw error;
   },
 
+  /** -------- Service prerequisites -------- */
+
+  async getServicePrereqs(serviceId: string): Promise<ServicePrerequisite[]> {
+    const { data, error } = await supabase
+      .from("service_prerequisites")
+      .select("service_id, prereq_service_id, required_status")
+      .eq("service_id", serviceId);
+
+    if (error) throw error;
+    return (data ?? []) as any;
+  },
+
+  async replaceServicePrereqs(
+    serviceId: string,
+    prereqs: { prereq_service_id: string; required_status: "completed" | "scheduled_or_completed" }[]
+  ): Promise<void> {
+    const { error: delErr } = await supabase.from("service_prerequisites").delete().eq("service_id", serviceId);
+    if (delErr) throw delErr;
+
+    if (!prereqs || prereqs.length === 0) return;
+
+    const rows = prereqs.map((p) => ({
+      service_id: serviceId,
+      prereq_service_id: p.prereq_service_id,
+      required_status: p.required_status,
+    }));
+
+    const { error: insErr } = await supabase.from("service_prerequisites").insert(rows);
+    if (insErr) throw insErr;
+  },
+
   /** -------- Session notes -------- */
 
-  async addSessionNote(appointmentId: string, noteData: Omit<SessionNote, "id" | "created_at" | "appointment_id">): Promise<void> {
+  async addSessionNote(
+    appointmentId: string,
+    noteData: Omit<SessionNote, "id" | "created_at" | "appointment_id">
+  ): Promise<void> {
     const payload = { ...noteData, appointment_id: appointmentId };
     const { error } = await supabase.from("session_notes").insert(payload);
     if (error) throw error;
@@ -354,7 +493,11 @@ export const db = {
   /** -------- Assessment scores -------- */
 
   async getUserAssessmentScores(userId: string): Promise<AssessmentScore[]> {
-    const { data, error } = await supabase.from("assessment_scores").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("assessment_scores")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []) as any;
   },
@@ -368,7 +511,6 @@ export const db = {
   /** -------- Eligibility -------- */
 
   async canBookRegularSessions(userId: string): Promise<boolean> {
-    // Consent
     const { data: profile, error: pErr } = await supabase
       .from("profiles")
       .select("consent_signed")
@@ -377,9 +519,6 @@ export const db = {
     if (pErr) throw pErr;
     const consentOk = !!profile?.consent_signed;
 
-    // Initial consult completed:
-    // New path: appointment.service_id -> services.is_initial = true
-    // Legacy fallback: appointment.service_type === "Initial Consultation"
     const { data: appts, error: aErr } = await supabase
       .from("appointments")
       .select("status, service_type, service:services(is_initial)")
@@ -391,9 +530,12 @@ export const db = {
       (appts ?? []).some((row: any) => row?.service?.is_initial === true) ||
       (appts ?? []).some((row: any) => row?.service_type === "Initial Consultation");
 
-    // Assessments completed
-    const { data: scores, error: sErr } = await supabase.from("assessment_scores").select("type").eq("user_id", userId);
+    const { data: scores, error: sErr } = await supabase
+      .from("assessment_scores")
+      .select("type")
+      .eq("user_id", userId);
     if (sErr) throw sErr;
+
     const types = new Set((scores ?? []).map((s: any) => s.type));
     const assessmentsOk = types.has("stress") && types.has("literacy");
 
@@ -401,15 +543,15 @@ export const db = {
   },
 
   async grantAssessmentRetake(userId: string): Promise<void> {
-    const start = new Date();
-    const end = new Date(start.getTime() + 1 * 60 * 1000);
+    const start = DateTime.now().toUTC().startOf("minute");
+    const end = start.plus({ minutes: 1 });
 
     const { error } = await supabase.from("appointments").insert({
       user_id: userId,
       service_id: null,
       service_type: "Admin-Granted Assessment Retake",
-      start_time: start.toISOString(),
-      end_time: end.toISOString(),
+      start_time: start.toISO(),
+      end_time: end.toISO(),
       status: "completed",
       notes: "Placeholder appointment to allow retake.",
     });
@@ -419,74 +561,88 @@ export const db = {
 
   /** -------- Availability -------- */
 
-  async getAvailabilityForDate(dateYYYYMMDD: string): Promise<{ booked: string[]; blocked: string[] }> {
-    const [y, m, d] = dateYYYYMMDD.split("-").map(Number);
+  async getAvailabilityForDate(
+    dateISO: string
+  ): Promise<{ booked: string[]; blocked: string[] }> {
+    const { startISO, endISO } = dayRangeInstantISO(dateISO);
 
-    const dayStart = new Date(y, m - 1, d, 0, 0, 0, 0);
-    const dayEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
+    // ✅ Replace direct table selects with RPC
+    const { data: intervals, error } = await supabase.rpc("get_busy_intervals", {
+      start_ts: startISO,
+      end_ts: endISO,
+    });
+    if (error) throw error;
 
-    const { data: blocks, error: blocksErr } = await supabase
-      .from("availability_blocks")
-      .select("*")
-      .lt("start_time", dayEnd.toISOString())
-      .gt("end_time", dayStart.toISOString());
-    if (blocksErr) throw blocksErr;
+    const dayStart = DateTime.fromISO(startISO, { zone: "utc" }).setZone(BUSINESS_TZ);
+    const dayEnd = DateTime.fromISO(endISO, { zone: "utc" }).setZone(BUSINESS_TZ);
 
-    const { data: bookedAppts, error: apptErr } = await supabase
-      .from("appointments")
-      .select("*")
-      .eq("status", "scheduled")
-      .lt("start_time", dayEnd.toISOString())
-      .gt("end_time", dayStart.toISOString());
-    if (apptErr) throw apptErr;
-
-    const toTimeLabel = (dt: Date) => {
-      let hours = dt.getHours();
-      const minutes = dt.getMinutes();
-      const ampm = hours >= 12 ? "PM" : "AM";
-      hours = hours % 12;
-      if (hours === 0) hours = 12;
-      const mm = String(minutes).padStart(2, "0");
-      return `${hours}:${mm} ${ampm}`;
+    const clampToDay = (startUtcIso: string, endUtcIso: string) => {
+      const s = DateTime.fromISO(startUtcIso, { zone: "utc" }).setZone(BUSINESS_TZ);
+      const e = DateTime.fromISO(endUtcIso, { zone: "utc" }).setZone(BUSINESS_TZ);
+      return {
+        start: s < dayStart ? dayStart : s,
+        end: e > dayEnd ? dayEnd : e,
+      };
     };
 
-    const addIntervalAs15MinBlocks = (startIso: string, endIso: string, out: Set<string>) => {
-      const s = new Date(startIso);
-      const e = new Date(endIso);
+    const addIntervalAs15MinBlocks = (startUtcIso: string, endUtcIso: string, out: Set<string>) => {
+      const { start, end } = clampToDay(startUtcIso, endUtcIso);
 
-      const start = s < dayStart ? new Date(dayStart) : s;
-      const end = e > dayEnd ? new Date(dayEnd) : e;
+      // normalize to 15-min grid
+      let t = start.startOf("minute");
+      const mod = t.minute % 15;
+      if (mod !== 0) t = t.plus({ minutes: 15 - mod });
 
-      for (let t = new Date(start); t < end; t = new Date(t.getTime() + 15 * 60 * 1000)) {
-        out.add(toTimeLabel(t));
+      for (; t < end; t = t.plus({ minutes: 15 })) {
+        out.add(t.toFormat("h:mm a")); // or your labelFromBusinessDT(t)
       }
     };
 
     const booked = new Set<string>();
     const blocked = new Set<string>();
 
-    (bookedAppts ?? []).forEach((a: any) => addIntervalAs15MinBlocks(a.start_time, a.end_time, booked));
-    (blocks ?? []).forEach((b: any) => addIntervalAs15MinBlocks(b.start_time, b.end_time, blocked));
+    (intervals ?? []).forEach((row: any) => {
+      if (!row?.start_time || !row?.end_time) return;
+
+      if (row.kind === "appointment") {
+        addIntervalAs15MinBlocks(row.start_time, row.end_time, booked);
+      } else if (row.kind === "block") {
+        addIntervalAs15MinBlocks(row.start_time, row.end_time, blocked);
+      }
+    });
 
     return { booked: Array.from(booked), blocked: Array.from(blocked) };
   },
 
-  async updateAvailability(dateYYYYMMDD: string, time12h: string, isUnavailable: boolean): Promise<void> {
-    const start = parseLocalDateAndTime(dateYYYYMMDD, time12h);
-    const end = new Date(start.getTime() + 15 * 60 * 1000);
+  async updateAvailability(dateISO: string, time12h: string, isUnavailable: boolean): Promise<void> {
+    const { hour, minute } = parseTimeLabel12h(time12h);
+
+    // Interpret the label in BUSINESS_TZ, then store as UTC instants (timestamptz)
+    const start = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ }).set({
+      hour,
+      minute,
+      second: 0,
+      millisecond: 0,
+    });
+    if (!start.isValid) throw new Error(`Invalid slot datetime: ${start.invalidReason}`);
+
+    const end = start.plus({ minutes: 15 });
+
+    const startUTC = start.toUTC().toISO()!;
+    const endUTC = end.toUTC().toISO()!;
 
     if (isUnavailable) {
       const { error } = await supabase.from("availability_blocks").insert({
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
+        start_time: startUTC,
+        end_time: endUTC,
       });
       if (error) throw error;
     } else {
       const { error } = await supabase
         .from("availability_blocks")
         .delete()
-        .eq("start_time", start.toISOString())
-        .eq("end_time", end.toISOString());
+        .eq("start_time", startUTC)
+        .eq("end_time", endUTC);
       if (error) throw error;
     }
   },

@@ -10,6 +10,11 @@ type Draft = Partial<Service> & {
   price_dollars?: string;
 };
 
+type PrereqDraft = {
+  prereq_service_id: string;
+  required_status: "completed" | "scheduled_or_completed";
+};
+
 const emptyDraft = (): Draft => ({
   category: "Coaching",
   name: "",
@@ -48,6 +53,10 @@ const AdminServicesPage: React.FC = () => {
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // NEW: prerequisites state
+  const [prereqs, setPrereqs] = useState<PrereqDraft[]>([]);
+  const [prereqsLoading, setPrereqsLoading] = useState(false);
+
   const load = async () => {
     setLoading(true);
     try {
@@ -70,14 +79,32 @@ const AdminServicesPage: React.FC = () => {
   const startNew = () => {
     setEditingId(null);
     setDraft(emptyDraft());
+    setPrereqs([]);
   };
 
-  const startEdit = (s: Service) => {
+  const startEdit = async (s: Service) => {
     setEditingId(s.id);
     setDraft({
       ...s,
       price_dollars: centsToDollars(s.price_cents),
     });
+
+    setPrereqsLoading(true);
+    try {
+      const rows = await db.getServicePrereqs(s.id);
+      setPrereqs(
+        (rows ?? []).map((r: any) => ({
+          prereq_service_id: r.prereq_service_id,
+          required_status: r.required_status ?? "completed",
+        }))
+      );
+    } catch (e) {
+      console.error(e);
+      showNotification("Could not load prerequisites.", "error");
+      setPrereqs([]);
+    } finally {
+      setPrereqsLoading(false);
+    }
   };
 
   const save = async () => {
@@ -104,13 +131,18 @@ const AdminServicesPage: React.FC = () => {
 
     setSavingId(editingId ?? "__new__");
     try {
-      await db.upsertService(payload);
+      const saved = await db.upsertService(payload);
+      const serviceId = saved?.id ?? editingId;
+      if (!serviceId) throw new Error("Could not determine saved service id.");
+
+      await db.replaceServicePrereqs(serviceId, prereqs);
+
       showNotification("Service saved.", "success");
       await load();
       startNew();
     } catch (e) {
       console.error(e);
-      showNotification("Could not save service (RLS?)", "error");
+      showNotification("Could not save service/prerequisites (RLS?)", "error");
     } finally {
       setSavingId(null);
     }
@@ -144,6 +176,14 @@ const AdminServicesPage: React.FC = () => {
       ),
     }));
   }, [services]);
+
+  const prereqOptions = useMemo(() => {
+    const excludeId = editingId ?? null;
+    return services
+      .filter((s) => s.is_active) // optional: only allow active prereqs
+      .filter((s) => s.id !== excludeId)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [services, editingId]);
 
   if (!user || !isAdmin) {
     return (
@@ -336,6 +376,104 @@ const AdminServicesPage: React.FC = () => {
                   />
                   Requires onboarding (consent + assessments + initial)
                 </label>
+              </div>
+
+              {/* NEW: prerequisites picker */}
+              <div className="border-t pt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-gray-700">Prerequisites</label>
+                  {prereqsLoading && <span className="text-xs text-gray-500">Loading…</span>}
+                </div>
+
+                <div className="text-xs text-gray-500 mb-3">
+                  Choose sessions a client must complete (or at least schedule) before booking this service.
+                </div>
+
+                <div className="flex gap-2">
+                  <select
+                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2"
+                    defaultValue=""
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (!id) return;
+                      if (prereqs.some((p) => p.prereq_service_id === id)) {
+                        e.currentTarget.value = "";
+                        return;
+                      }
+                      setPrereqs((prev) => [
+                        ...prev,
+                        { prereq_service_id: id, required_status: "completed" },
+                      ]);
+                      e.currentTarget.value = "";
+                    }}
+                    disabled={prereqsLoading}
+                  >
+                    <option value="">+ Add prerequisite…</option>
+                    {prereqOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {prereqs.length === 0 ? (
+                    <div className="text-sm text-gray-600">No prerequisites.</div>
+                  ) : (
+                    prereqs.map((p) => {
+                      const svc = services.find((s) => s.id === p.prereq_service_id);
+                      return (
+                        <div
+                          key={p.prereq_service_id}
+                          className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-gray-900 truncate">
+                              {svc?.name ?? p.prereq_service_id}
+                            </div>
+                            <div className="text-xs text-gray-500 truncate">{svc?.category ?? ""}</div>
+                          </div>
+
+                          <select
+                            className="border border-gray-300 rounded-lg px-2 py-1 text-sm"
+                            value={p.required_status}
+                            onChange={(e) => {
+                              const v = e.target.value as PrereqDraft["required_status"];
+                              setPrereqs((prev) =>
+                                prev.map((x) =>
+                                  x.prereq_service_id === p.prereq_service_id ? { ...x, required_status: v } : x
+                                )
+                              );
+                            }}
+                          >
+                            <option value="completed">Must be completed</option>
+                            <option value="scheduled_or_completed">Scheduled or completed</option>
+                          </select>
+
+                          <button
+                            type="button"
+                            className="p-2 rounded hover:bg-red-50 text-red-600"
+                            title="Remove prerequisite"
+                            onClick={() =>
+                              setPrereqs((prev) =>
+                                prev.filter((x) => x.prereq_service_id !== p.prereq_service_id)
+                              )
+                            }
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {!!draft.is_initial && prereqs.length > 0 && (
+                  <div className="mt-3 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                    Heads up: this service is marked as an initial consult. Adding prerequisites may make it impossible to book.
+                  </div>
+                )}
               </div>
 
               <div>

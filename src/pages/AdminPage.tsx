@@ -1,19 +1,92 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Calendar, ChevronLeft, ChevronRight, ShieldAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { DateTime } from "luxon";
+
 import { useAuth } from "../contexts/AuthContext";
 import { useNotification } from "../contexts/NotificationContext";
-import { db, generateTimeSlots, toISODateLocal } from "../lib/database";
+import { db } from "../lib/database";
+import { BUSINESS_TZ } from "../lib/time";
 
 type DayAvailability = { booked: string[]; blocked: string[] };
+
+type WeekDay = {
+  iso: string; // YYYY-MM-DD in BUSINESS_TZ
+  labelTop: string; // "Mon"
+  labelBottom: string; // "Jan 7"
+};
+
+function parseTime12h(timeStr: string): { hours: number; minutes: number } {
+  const [time, modifierRaw] = timeStr.trim().split(/\s+/);
+  const modifier = (modifierRaw || "").toUpperCase();
+  let [hours, minutes] = time.split(":").map(Number);
+
+  if (modifier === "AM" && hours === 12) hours = 0;
+  if (modifier === "PM" && hours < 12) hours += 12;
+
+  return { hours, minutes };
+}
+
+function isPastSlot(dateISO: string, timeStr: string): boolean {
+  const { hours, minutes } = parseTime12h(timeStr);
+  const slot = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ }).set({
+    hour: hours,
+    minute: minutes,
+    second: 0,
+    millisecond: 0,
+  });
+  return slot < DateTime.now().setZone(BUSINESS_TZ);
+}
+
+function buildWeekDays(weekOffset: number): WeekDay[] {
+  // Start week on SUNDAY (consistent with your original UI)
+  const now = DateTime.now().setZone(BUSINESS_TZ).startOf("day");
+  const daysSinceSunday = now.weekday % 7; // Sunday=7 -> 0, Mon=1 -> 1, ...
+  const startOfWeek = now.minus({ days: daysSinceSunday }).plus({ days: weekOffset * 7 });
+
+  const out: WeekDay[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = startOfWeek.plus({ days: i });
+    out.push({
+      iso: d.toISODate()!,
+      labelTop: d.toFormat("ccc"),
+      labelBottom: d.toFormat("LLL d"),
+    });
+  }
+  return out;
+}
+
+function formatWeekRange(days: WeekDay[]): string {
+  if (days.length !== 7) return "";
+  const a = DateTime.fromISO(days[0].iso, { zone: BUSINESS_TZ });
+  const b = DateTime.fromISO(days[6].iso, { zone: BUSINESS_TZ });
+  return `${a.toFormat("ccc, LLL d")} - ${b.toFormat("ccc, LLL d")}`;
+}
+
+function generateTimeSlotsForISO(dateISO: string): string[] {
+  const day = DateTime.fromISO(dateISO, { zone: BUSINESS_TZ });
+  const isWeekend = day.weekday === 6 || day.weekday === 7; // Sat/Sun
+
+  const startHour = isWeekend ? 10 : 9;
+  const endHour = 19;
+
+  const start = day.set({ hour: startHour, minute: 0, second: 0, millisecond: 0 });
+  const end = day.set({ hour: endHour, minute: 0, second: 0, millisecond: 0 });
+
+  const slots: string[] = [];
+  for (let t = start; t < end; t = t.plus({ minutes: 15 })) {
+    slots.push(t.toFormat("h:mm a"));
+  }
+  return slots;
+}
 
 const AdminPage: React.FC = () => {
   const { user } = useAuth() as any;
   const navigate = useNavigate();
   const { showNotification } = useNotification();
 
-  // ---- admin guard (adjust to your user shape) ----
   const isAdmin = Boolean(user?.isAdmin || user?.role === "admin");
+
   useEffect(() => {
     if (!user) return;
     if (!isAdmin) navigate("/account");
@@ -23,56 +96,21 @@ const AdminPage: React.FC = () => {
   const [availability, setAvailability] = useState<Record<string, DayAvailability>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
 
-  const generateWeekDates = (weekOffset: number) => {
-    const today = new Date();
-    const startOfWeek = new Date(today);
-    startOfWeek.setHours(0, 0, 0, 0);
-    const dayOfWeek = today.getDay(); // Sunday=0
-    startOfWeek.setDate(today.getDate() - dayOfWeek + weekOffset * 7);
+  const weekDays = useMemo(() => buildWeekDays(currentWeek), [currentWeek]);
+  const timeSlots = useMemo(
+    () => (weekDays[0]?.iso ? generateTimeSlotsForISO(weekDays[0].iso) : []),
+    [weekDays]
+  );
 
-    const dates: Date[] = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(startOfWeek);
-      d.setDate(startOfWeek.getDate() + i);
-      dates.push(d);
-    }
-    return dates;
-  };
-
-  const weekDates = useMemo(() => generateWeekDates(currentWeek), [currentWeek]);
-
-  const formatDate = (date: Date) =>
-    date.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
-
-  const formatWeekRange = (dates: Date[]) => `${formatDate(dates[0])} - ${formatDate(dates[6])}`;
-
-  // ---- helpers for "Passed" slots ----
-  const parseTime12h = (timeStr: string) => {
-    const [time, modifier] = timeStr.split(" ");
-    let [hours, minutes] = time.split(":").map(Number);
-    if (hours === 12 && modifier === "AM") hours = 0;
-    if (modifier === "PM" && hours < 12) hours += 12;
-    return { hours, minutes };
-  };
-
-  const isPastSlot = (date: Date, timeStr: string) => {
-    const { hours, minutes } = parseTime12h(timeStr);
-    const slotStart = new Date(date);
-    slotStart.setHours(hours, minutes, 0, 0);
-    return slotStart.getTime() < Date.now();
-  };
-
-  // ---- load availability for the week ----
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
         const out: Record<string, DayAvailability> = {};
-        for (const date of weekDates) {
-          const iso = toISODateLocal(date);
-          const res = await db.getAvailabilityForDate(iso); // { booked, blocked }
-          out[iso] = {
+        for (const d of weekDays) {
+          const res = await db.getAvailabilityForDate(d.iso);
+          out[d.iso] = {
             booked: Array.isArray(res?.booked) ? res.booked : [],
             blocked: Array.isArray(res?.blocked) ? res.blocked : [],
           };
@@ -87,15 +125,15 @@ const AdminPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [weekDates]);
+  }, [weekDays]);
 
   const isBooked = (iso: string, time: string) => (availability[iso]?.booked ?? []).includes(time);
   const isBlocked = (iso: string, time: string) => (availability[iso]?.blocked ?? []).includes(time);
 
-  const toggleBlocked = async (iso: string, time: string, dateObj?: Date) => {
+  const toggleBlocked = async (iso: string, time: string) => {
     // never allow toggling booked or passed slots
     if (isBooked(iso, time)) return;
-    if (dateObj && isPastSlot(dateObj, time)) return;
+    if (isPastSlot(iso, time)) return;
 
     const key = `${iso} ${time}`;
     const currentlyBlocked = isBlocked(iso, time);
@@ -116,15 +154,12 @@ const AdminPage: React.FC = () => {
 
     setSavingKey(key);
     try {
-      // Expected: (dateISO, timeLabel, shouldBeBlocked)
       await db.updateAvailability(iso, time, nextBlocked);
-
       showNotification(nextBlocked ? "Slot blocked." : "Slot unblocked.", "success");
     } catch (e) {
       console.error(e);
       showNotification("Could not update slot. Reverting.", "error");
 
-      // revert by reloading day
       try {
         const res = await db.getAvailabilityForDate(iso);
         setAvailability((prev) => ({
@@ -163,9 +198,7 @@ const AdminPage: React.FC = () => {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-10">
           <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">Admin Availability</h1>
-          <p className="text-gray-600">
-            Click a slot to toggle it as blocked (booked slots can’t be changed).
-          </p>
+          <p className="text-gray-600">Click a slot to toggle it as blocked (booked/passed slots can’t be changed).</p>
         </div>
 
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
@@ -181,7 +214,7 @@ const AdminPage: React.FC = () => {
                 Previous Week
               </button>
 
-              <h2 className="text-lg font-semibold text-gray-900">{formatWeekRange(weekDates)}</h2>
+              <h2 className="text-lg font-semibold text-gray-900">{formatWeekRange(weekDays)}</h2>
 
               <button
                 onClick={() => setCurrentWeek((w) => w + 1)}
@@ -212,54 +245,46 @@ const AdminPage: React.FC = () => {
               <div className="border border-gray-200 rounded-lg inline-block min-w-full">
                 <div className="grid grid-cols-8 bg-gray-50">
                   <div className="p-3 text-sm font-medium text-gray-700 border-r">Time</div>
-                  {weekDates.map((date) => (
+                  {weekDays.map((d) => (
                     <div
-                      key={date.toISOString()}
+                      key={d.iso}
                       className="p-3 text-sm font-medium text-center text-gray-700 border-r last:border-r-0"
                     >
-                      <span className="text-grima-primary">
-                        {date.toLocaleDateString("en-CA", { weekday: "short" })}
-                      </span>
+                      <span className="text-grima-primary">{d.labelTop}</span>
                       <br />
-                      {date.toLocaleDateString("en-CA", { month: "short", day: "numeric" })}
+                      {d.labelBottom}
                     </div>
                   ))}
                 </div>
 
                 <div>
-                  {generateTimeSlots(weekDates[0]).map((time: string) => (
+                  {timeSlots.map((time) => (
                     <div key={time} className="grid grid-cols-8 border-t">
-                      <div className="p-3 text-xs text-gray-600 border-r bg-gray-50 font-medium">
-                        {time}
-                      </div>
+                      <div className="p-3 text-xs text-gray-600 border-r bg-gray-50 font-medium">{time}</div>
 
-                      {weekDates.map((date) => {
-                        const iso = toISODateLocal(date);
+                      {weekDays.map((d) => {
+                        const iso = d.iso;
                         const booked = isBooked(iso, time);
                         const blocked = isBlocked(iso, time);
-                        const passed = isPastSlot(date, time);
+                        const passed = isPastSlot(iso, time);
 
                         const key = `${iso} ${time}`;
                         const isSaving = savingKey === key;
 
-                        // Priority: booked > passed > blocked/available
                         return (
-                          <div key={date.toISOString()} className="border-r last:border-r-0">
+                          <div key={iso} className="border-r last:border-r-0">
                             {booked ? (
                               <div className="w-full h-12 bg-gray-100 flex items-center justify-center">
                                 <span className="text-gray-500 text-xs">Booked</span>
                               </div>
                             ) : passed ? (
-                              <div
-                                className="w-full h-12 bg-slate-100 flex items-center justify-center"
-                                title="This time slot has already passed."
-                              >
+                              <div className="w-full h-12 bg-slate-100 flex items-center justify-center" title="Passed">
                                 <span className="text-slate-500 text-xs">Passed</span>
                               </div>
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => toggleBlocked(iso, time, date)}
+                                onClick={() => toggleBlocked(iso, time)}
                                 disabled={isSaving}
                                 className={`w-full h-12 text-xs font-medium transition-colors ${
                                   blocked
