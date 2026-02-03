@@ -26,6 +26,12 @@ const Footer = () => {
               <li><Link to="/booking" className="text-grima-200 hover:text-white transition-colors">Book Session</Link></li>
               {/* Removed About Us link as per request */}
               <li><Link to="/assessments" className="text-grima-200 hover:text-white transition-colors">Assessments</Link></li>
+              <li>
+                <a href="#faq" className="text-grima-200 hover:text-white transition-colors">
+                  FAQ
+                </a>
+              </li>
+
             </ul>
           </div>
 
@@ -40,6 +46,36 @@ const Footer = () => {
                   <span>TikTok</span>
                </a>
                 <a href="https://www.blossomsocial.com/users/Jacob__AbbGWA8gvnvhgThq" target="_blank" rel="noopener noreferrer" className="flex items-center space-x-2 text-grima-200 hover:text-white transition-colors"><User size={20} /><span>Grima's Portfolio</span></a>
+            </div>
+          </div>
+        </div>
+
+        {/* FAQ Section */}
+        <div id="faq" className="mt-10">
+          <div className="border-t border-grima-600 pt-8">
+            <h3 className="text-lg font-semibold mb-4">FAQ</h3>
+
+            <div className="space-y-4 max-w-3xl">
+              <div>
+                <p className="text-white font-medium">How do bookings work?</p>
+                <p className="text-grima-200 text-sm mt-1">
+                  You can book a session from the Booking page. After confirmation, it will appear in your dashboard.
+                </p>
+              </div>
+
+              <div>
+                <p className="text-white font-medium">Can I reschedule or cancel?</p>
+                <p className="text-grima-200 text-sm mt-1">
+                  If rescheduling is available, you’ll see an option in your booking details. Otherwise, send us a message using the chat button.
+                </p>
+              </div>
+
+              <div>
+                <p className="text-white font-medium">Is my information private?</p>
+                <p className="text-grima-200 text-sm mt-1">
+                  We only use your information to provide services and improve your experience.
+                </p>
+              </div>
             </div>
           </div>
         </div>

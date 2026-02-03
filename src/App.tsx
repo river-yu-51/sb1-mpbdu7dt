@@ -47,6 +47,7 @@ function App() {
               <Route path="/admin/services" element={<AdminServicesPage />} />
               <Route path="/assessments" element={<AssessmentsPage />} />
               <Route path="/consent" element={<ConsentFormPage />} />
+              <Route path="/consent/view" element={<ConsentFormPage />} />
               <Route path="/auth/callback" element={<AuthCallback />} />
             </Routes>
           </main>

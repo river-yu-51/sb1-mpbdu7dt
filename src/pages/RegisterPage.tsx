@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Eye, EyeOff, Lock, Mail, Phone, User, UserPlus } from "lucide-react";
+import { Eye, EyeOff, Lock, Mail, Phone, User, UserPlus, Hash } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useNotification } from "../contexts/NotificationContext";
 
@@ -46,9 +46,12 @@ const RegisterPage: React.FC = () => {
     if (password !== confirmPassword) return "Passwords do not match.";
 
     const ageNum = Number(age);
-    if (!Number.isFinite(ageNum) || ageNum < 15 || ageNum > 25) {
-      return "Our services are designed for ages 15–25.";
+
+    if (!Number.isInteger(ageNum) || ageNum < 0 || ageNum > 120) {
+      showNotification("Please enter a valid age between 0 and 120.", "error");
+      return;
     }
+
 
     return null;
   }, [firstName, lastName, email, phone, age, password, confirmPassword]);
@@ -171,20 +174,22 @@ const RegisterPage: React.FC = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Age *</label>
-                <select
-                  value={age}
-                  onChange={(e) => setAge(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg bg-white"
-                  required
-                  disabled={submitting}
-                >
-                  <option value="">Select age</option>
-                  {Array.from({ length: 11 }, (_, i) => i + 15).map((a) => (
-                    <option key={a} value={String(a)}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <Hash size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={120}
+                    placeholder="Age"
+                    value={age}
+                    onChange={(e) => setAge(e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-lg pl-10"
+                    required
+                    disabled={submitting}
+                    onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()} // optional: stops scroll changing value
+                  />
+                </div>
               </div>
             </div>
 

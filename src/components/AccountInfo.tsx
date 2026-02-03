@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { Edit, Save } from "lucide-react";
 import { useNotification } from "../contexts/NotificationContext";
 import { supabase } from "../lib/supabase";
+import { useNavigate } from "react-router-dom";
 
 type ProfileUpdate = {
   first: string | null;
@@ -13,6 +14,16 @@ type ProfileUpdate = {
 const AccountInfo = () => {
   const { user, updateUser } = useAuth();
   const { showNotification } = useNotification();
+  const navigate = useNavigate();
+
+  const consentSigned = !!(user as any).consentSigned;
+  const consentSignedAtLabel = useMemo(() => {
+    const raw = (user as any).consentSignDate as string | null | undefined;
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString("en-CA", { year: "numeric", month: "long", day: "numeric" });
+  }, [user]);
 
   const [formData, setFormData] = useState<ProfileUpdate>({
     first: null,
@@ -30,7 +41,6 @@ const AccountInfo = () => {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Keep form in sync once user loads / changes
   useEffect(() => {
     if (!user) return;
     setFormData({
@@ -72,7 +82,6 @@ const AccountInfo = () => {
     if (passwords.new.length < 6)
       return showNotification("New password must be at least 6 characters long.", "error");
 
-    // Supabase password change requires a valid session
     try {
       const { error } = await supabase.auth.updateUser({ password: passwords.new });
       if (error) {
@@ -90,7 +99,6 @@ const AccountInfo = () => {
     }
   };
 
-  // Display helpers (support either shape)
   const displayFirst = (user as any).firstName ?? (user as any).first ?? "";
   const displayLast = (user as any).lastName ?? (user as any).last ?? "";
 
@@ -127,7 +135,6 @@ const AccountInfo = () => {
             disabled={!isEditingDetails || saving}
           />
 
-          {/* Email: show, but do not edit here */}
           <InputField label="Email Address" value={user.email ?? ""} disabled />
 
           <InputField
@@ -172,6 +179,35 @@ const AccountInfo = () => {
       <div className="bg-white p-6 rounded-lg shadow-md border">
         <h3 className="text-xl font-bold text-gray-900 mb-2">Security</h3>
 
+        <div className="mb-6">
+          <h4 className="text-sm font-semibold text-gray-800 mb-1">Consent Form</h4>
+          {consentSigned ? (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <p className="text-sm text-gray-600">
+                Signed{consentSignedAtLabel ? ` on ${consentSignedAtLabel}` : ""}.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate("/consent/view")}
+                className="text-sm text-grima-primary font-medium hover:underline text-left"
+              >
+                View signed consent form
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <p className="text-sm text-gray-600">Not signed yet.</p>
+              <button
+                type="button"
+                onClick={() => navigate("/consent")}
+                className="text-sm text-grima-primary font-medium hover:underline text-left"
+              >
+                Sign consent form
+              </button>
+            </div>
+          )}
+        </div>
+
         {!isChangingPassword ? (
           <button
             onClick={() => setIsChangingPassword(true)}
@@ -181,7 +217,6 @@ const AccountInfo = () => {
           </button>
         ) : (
           <div className="mt-6 space-y-4">
-            {/* current password is optional; kept for UX but not required by Supabase */}
             <InputField
               label="Current Password (optional)"
               type="password"

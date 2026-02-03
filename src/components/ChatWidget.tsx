@@ -1,20 +1,29 @@
 import React, { useEffect, useMemo, useState, FormEvent } from "react";
 import { MessageSquare, X } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { supabase } from "../lib/supabase";
 
-const ChatWidget = () => {
+type ContactPayload = {
+  name: string;
+  email: string;
+  subject: string;
+  message: string;
+  user_id: string | null;
+};
+
+const ChatWidget: React.FC = () => {
   const { user, addMessage } = useAuth();
 
   const [isOpen, setIsOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [sending, setSending] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const displayName = useMemo(() => {
     if (!user) return "";
     const first = (user as any).firstName ?? (user as any).first ?? "";
     const last = (user as any).lastName ?? (user as any).last ?? "";
-    const full = `${first} ${last}`.trim();
-    return full || "";
+    return `${first} ${last}`.trim();
   }, [user]);
 
   const [formData, setFormData] = useState({
@@ -41,8 +50,11 @@ const ChatWidget = () => {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
 
     const trimmed = formData.message.trim();
+    const subject = (formData.subject || "General Inquiry").trim();
+
     if (!trimmed) return;
 
     // If not logged in, require name/email
@@ -51,15 +63,49 @@ const ChatWidget = () => {
       if (!formData.email.trim()) return;
     }
 
+    const payload: ContactPayload = {
+      user_id: user?.id ?? null,
+      name: user ? displayName || formData.name.trim() : formData.name.trim(),
+      email: user ? (user.email ?? formData.email).trim() : formData.email.trim(),
+      subject,
+      message: trimmed,
+    };
+
     setSending(true);
     try {
-      await addMessage({
-        user_id: user?.id || null,
-        name: user ? displayName || formData.name : formData.name,
-        email: user ? user.email ?? formData.email : formData.email,
-        subject: formData.subject,
-        message: trimmed,
+      // 1) Store message (audit trail / admin inbox)
+      // If your RLS is not fixed yet, this might throw.
+      try {
+        await addMessage({
+          user_id: payload.user_id,
+          name: payload.name,
+          email: payload.email,
+          subject: payload.subject,
+          message: payload.message,
+        });
+      } catch (dbErr) {
+        // Don't fail the whole UX if email send works.
+        console.warn("addMessage failed (likely RLS):", dbErr);
+      }
+
+      // 2) Send email via Supabase Edge Function
+      // IMPORTANT: function name matches your folder: contact_email
+      const { data, error } = await supabase.functions.invoke("contact_email", {
+        body: {
+          name: payload.name,
+          email: payload.email,
+          subject: payload.subject,
+          message: payload.message,
+        },
       });
+
+      if (error) {
+        console.error("contact_email invoke error:", error);
+        throw new Error("Failed to send email. Please try again.");
+      }
+
+      // optional: if your function returns { ok: true }
+      // console.log("contact_email success:", data);
 
       setSubmitted(true);
 
@@ -68,8 +114,9 @@ const ChatWidget = () => {
         setSubmitted(false);
         setFormData((prev) => ({ ...prev, message: "" }));
       }, 2000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("ChatWidget send failed:", err);
+      setErrorMsg(err?.message ?? "Something went wrong sending your message.");
     } finally {
       setSending(false);
     }
@@ -120,6 +167,7 @@ const ChatWidget = () => {
                         placeholder="Your Name"
                         className="w-full p-2 border border-gray-300 rounded text-sm"
                         required
+                        disabled={sending}
                       />
                     </div>
                     <div>
@@ -131,10 +179,24 @@ const ChatWidget = () => {
                         placeholder="Your Email"
                         className="w-full p-2 border border-gray-300 rounded text-sm"
                         required
+                        disabled={sending}
                       />
                     </div>
                   </>
                 )}
+
+                {/* Optional: expose subject if you want */}
+                {/* <div>
+                  <input
+                    type="text"
+                    name="subject"
+                    value={formData.subject}
+                    onChange={handleInputChange}
+                    placeholder="Subject"
+                    className="w-full p-2 border border-gray-300 rounded text-sm"
+                    disabled={sending}
+                  />
+                </div> */}
 
                 <div>
                   <textarea
@@ -145,8 +207,13 @@ const ChatWidget = () => {
                     rows={5}
                     className="w-full p-2 border border-gray-300 rounded text-sm resize-none"
                     required
+                    disabled={sending}
                   />
                 </div>
+
+                {errorMsg && (
+                  <div className="text-sm text-red-600">{errorMsg}</div>
+                )}
 
                 <div>
                   <button

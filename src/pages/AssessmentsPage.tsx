@@ -16,6 +16,8 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import { useNotification } from "../contexts/NotificationContext";
 import Tooltip from "../components/Tooltip";
+import { supabase } from "../lib/supabase";
+import { getAnonId } from "../lib/anon";
 
 /** =========================
  * Types
@@ -748,6 +750,11 @@ export default function AssessmentsPage() {
   };
 
   const calculateAndSubmit = async () => {
+    console.log("[assessments] calculateAndSubmit fired", {
+      currentTest,
+      isLoggedIn: !!user,
+    });
+
     if (!currentTest || !activeTestData) return;
 
     const getVal = (key: string) => parseInt(answers[key] ?? "0", 10) || 0;
@@ -866,21 +873,57 @@ export default function AssessmentsPage() {
 
     try {
       if (user) {
+        // Logged-in: save directly to assessment_scores
         await addAssessmentScore({
           user_id: user.id,
           type: currentTest,
           score_breakdown: calculated.score_breakdown,
           user_answers: answers,
         });
+
+        // if authed, we don't need local temp storage
         sessionStorage.removeItem("tempAssessmentResults");
+        console.log("[assessments] saved score for authed user:", user.id);
       } else {
+        // Logged-out: insert ONE row into assessment_attempts
+        const anonId = getAnonId();
+
+        const payload = {
+          type: currentTest,
+          anonymous_id: anonId,
+          score_breakdown: calculated.score_breakdown,
+          user_answers: answers,
+        };
+
+        console.log("[assessments] anon insert payload:", payload);
+
+        const { data: inserted, error: insErr } = await supabase
+          .from("assessment_attempts")
+          .insert(payload)
+          .select("id, anonymous_id, user_id, created_at")
+          .single();
+
+        console.log("[assessments] anon insert result:", { inserted, insErr });
+
+        // Always store locally as a fallback so the user sees results even if DB insert fails
         sessionStorage.setItem("tempAssessmentResults", JSON.stringify(calculated));
+
+        if (insErr) {
+          showNotification(
+            "Your result was saved temporarily in this browser (not to your account). You can still create an account to save it permanently.",
+            "error"
+          );
+        }
       }
     } catch (err) {
-      console.error("Failed to save assessment:", err);
+      console.error("[assessments] Failed to save assessment:", err);
+
+      // Always show results locally if anon
+      if (!user) {
+        sessionStorage.setItem("tempAssessmentResults", JSON.stringify(calculated));
+      }
+
       showNotification("Failed to save your score. Please try again or contact support.", "error");
-      // Show results locally
-      if (!user) sessionStorage.setItem("tempAssessmentResults", JSON.stringify(calculated));
     }
 
     setStage("results");
