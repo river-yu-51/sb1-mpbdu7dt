@@ -3,10 +3,10 @@ import { Calendar, ChevronLeft, ChevronRight, ShieldAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { DateTime } from "luxon";
 
-import { useAuth } from "../contexts/AuthContext";
-import { useNotification } from "../contexts/NotificationContext";
-import { db } from "../lib/database";
-import { BUSINESS_TZ } from "../lib/time";
+import { useAuth } from "../../contexts/AuthContext";
+import { useNotification } from "../../contexts/NotificationContext";
+import { db } from "../../lib/database";
+import { BUSINESS_TZ } from "../../lib/time";
 
 type DayAvailability = { booked: string[]; blocked: string[] };
 
@@ -80,7 +80,7 @@ function generateTimeSlotsForISO(dateISO: string): string[] {
   return slots;
 }
 
-const AdminPage: React.FC = () => {
+const AdminAvailabilityPage: React.FC = () => {
   const { user } = useAuth() as any;
   const navigate = useNavigate();
   const { showNotification } = useNotification();
@@ -316,4 +316,4 @@ const AdminPage: React.FC = () => {
   );
 };
 
-export default AdminPage;
+export default AdminAvailabilityPage;

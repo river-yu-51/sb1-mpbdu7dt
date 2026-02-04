@@ -14,14 +14,18 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import AuthCallback from "./pages/AuthCallback";
 import AccountPage from "./pages/AccountPage";
-import AdminPage from "./pages/AdminPage";
-import AdminServicesPage from "./pages/AdminServicesPage";
 import AssessmentsPage from "./pages/AssessmentsPage";
 import ChatWidget from "./components/ChatWidget";
 import ConsentFormPage from "./pages/ConsentFormPage";
 import Notification from "./components/Notification";
 import ReschedulePage from "./pages/ReschedulePage";
 import WorkshopsPage from "./pages/WorkshopsPage";
+import FAQPage from "./pages/FAQpage";
+import AdminLayout from "./pages/admin/AdminLayout";
+import AdminHomePage from "./pages/admin/AdminHomePage";
+import AdminServicesPage from "./pages/admin/AdminServicesPage";
+import AdminFaqsPage from "./pages/admin/AdminFaqsPage";
+import AdminAvailabilityPage from "./pages/admin/AdminAvailabilityPage";
 
 function App() {
   return (
@@ -43,12 +47,17 @@ function App() {
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/account" element={<AccountPage />} />
-              <Route path="/admin" element={<AdminPage />} />
-              <Route path="/admin/services" element={<AdminServicesPage />} />
+              <Route path="/faq" element={<FAQPage/>} />
               <Route path="/assessments" element={<AssessmentsPage />} />
               <Route path="/consent" element={<ConsentFormPage />} />
               <Route path="/consent/view" element={<ConsentFormPage />} />
               <Route path="/auth/callback" element={<AuthCallback />} />
+              <Route path="/admin" element={<AdminLayout />}>
+                <Route index element={<AdminHomePage />} />
+                <Route path="availability" element={<AdminAvailabilityPage />} />
+                <Route path="services" element={<AdminServicesPage />} />
+                <Route path="faqs" element={<AdminFaqsPage />} />
+              </Route>
             </Routes>
           </main>
           <Footer />

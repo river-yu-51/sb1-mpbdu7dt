@@ -56,9 +56,9 @@ const ScoreDisplay = ({ scoreData }: { scoreData: AssessmentScore }) => {
             {/* Removed individual ScoreScale to reduce clutter */}
             <li className="flex justify-between"><span>Spending & Budgeting:</span> <strong>{(score_breakdown.subScores.s1a / 4).toFixed(1)}/5</strong></li>
             <li className="flex justify-between"><span>Current Confidence:</span> <strong>{(score_breakdown.subScores.s1b / 4).toFixed(1)}/5</strong></li>
-            <li className="flex justify-between"><span>Social Influences:</span> <strong>{(score_breakdown.s1c / 4).toFixed(1)}/5</strong></li>
-            <li className="flex justify-between"><span>Future Security:</span> <strong>{(score_breakdown.s1d / 4).toFixed(1)}/5</strong></li>
-            <li className="flex justify-between"><span>Other Stressors:</span> <strong>{(score_breakdown.s1e / 4).toFixed(1)}/5</strong></li>
+            <li className="flex justify-between"><span>Social Influences:</span> <strong>{(score_breakdown.subScores.s1c / 4).toFixed(1)}/5</strong></li>
+            <li className="flex justify-between"><span>Future Security:</span> <strong>{(score_breakdown.subScores.s1d / 4).toFixed(1)}/5</strong></li>
+            <li className="flex justify-between"><span>Other Stressors:</span> <strong>{(score_breakdown.subScores.s1e / 4).toFixed(1)}/5</strong></li>
           </ul>
         </div>
         <div>
@@ -66,8 +66,8 @@ const ScoreDisplay = ({ scoreData }: { scoreData: AssessmentScore }) => {
             <ul className="mt-1 space-y-1 text-gray-600">
                 {/* Removed individual ScoreScale to reduce clutter */}
                 <li className="flex justify-between"><span>Affective Reactions:</span> <strong>{(score_breakdown.subScores.s2a / 5).toFixed(1)}/5</strong></li>
-                <li className="flex justify-between"><span>Interpersonal Effects:</span> <strong>{(score_breakdown.s2b / 5).toFixed(1)}/5</strong></li>
-                <li className="flex justify-between"><span>Physiological Responses:</span> <strong>{(score_breakdown.s2c / 5).toFixed(1)}/5</strong></li>
+                <li className="flex justify-between"><span>Interpersonal Effects:</span> <strong>{(score_breakdown.subScores.s2b / 5).toFixed(1)}/5</strong></li>
+                <li className="flex justify-between"><span>Physiological Responses:</span> <strong>{(score_breakdown.subScores.s2c / 5).toFixed(1)}/5</strong></li>
             </ul>
         </div>
     </div>
@@ -172,7 +172,12 @@ const ScoreDisplay = ({ scoreData }: { scoreData: AssessmentScore }) => {
             <h3 className="text-xl font-bold text-gray-900 capitalize">{type} Score</h3>
           </div>
           <p className="text-3xl font-bold text-grima-primary">
-              {overallScore.toFixed(isLiteracy ? 0 : 1)}<span className="text-xl text-gray-400">/{isLiteracy ? 100 : 5}</span>
+            {isLiteracy
+              ? overallScore.toFixed(0)
+              : (overallScore * 20).toFixed(0)}
+            <span className="text-xl text-gray-400">
+              /{isLiteracy ? 100 : 100}
+            </span>
           </p>
         </div>
         

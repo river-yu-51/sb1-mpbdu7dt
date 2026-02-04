@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, Save, ShieldAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../contexts/AuthContext";
-import { useNotification } from "../contexts/NotificationContext";
-import { db, Service } from "../lib/database";
+import { useAuth } from "../../contexts/AuthContext";
+import { useNotification } from "../../contexts/NotificationContext";
+import { db, Service } from "../../lib/database";
 
 type Draft = Partial<Service> & {
   // for form convenience

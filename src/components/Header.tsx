@@ -75,12 +75,14 @@ const Header = () => {
   const loggedOutNavigation = [
     { name: 'Book', href: '/booking' },
     { name: 'Assessments', href: '/assessments', onClick: handleAssessmentsClick },
+    { name: 'FAQ', href: '/faq' },
   ];
 
   const loggedInNavigation = [
     { name: 'Dashboard', href: '/account' },
     { name: 'Book', href: '/booking' },
     { name: 'Assessments', href: '/assessments', onClick: handleAssessmentsClick },
+    { name: 'FAQ', href: '/faq' },
   ];
 
   const servicesDropdownItems = [
@@ -209,26 +211,16 @@ const Header = () => {
                       </Link>
 
                       {isAdmin && (
-                        <>
-                          <Link
-                            to="/admin"
-                            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                            onClick={closeAllMenus}
-                          >
-                            <Settings size={14} className="inline mr-2" />
-                            Admin Dashboard
-                          </Link>
-
-                          <Link
-                            to="/admin/services"
-                            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                            onClick={closeAllMenus}
-                          >
-                            <Box size={14} className="inline mr-2" />
-                            Admin Services
-                          </Link>
-                        </>
+                        <Link
+                          to="/admin"
+                          className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                          onClick={closeAllMenus}
+                        >
+                          <Settings size={14} className="inline mr-2" />
+                          Admin
+                        </Link>
                       )}
+
 
 
                       <button
@@ -343,24 +335,16 @@ const Header = () => {
                       </Link>
 
                       {isAdmin && (
-                        <>
-                          <Link
-                            to="/admin"
-                            className="block px-3 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
-                            onClick={closeAllMenus}
-                          >
-                            Admin Dashboard
-                          </Link>
-
-                          <Link
-                            to="/admin/services"
-                            className="block px-3 py-2 text-base font-medium text-gray-700 hover:bg-gray-50"
-                            onClick={closeAllMenus}
-                          >
-                            Admin Services
-                          </Link>
-                        </>
+                        <Link
+                          to="/admin"
+                          className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                          onClick={closeAllMenus}
+                        >
+                          <Settings size={14} className="inline mr-2" />
+                          Admin
+                        </Link>
                       )}
+
 
                       <button
                         type="button"

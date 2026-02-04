@@ -483,17 +483,17 @@ function ScoreScale({
   showScore?: boolean;
 }) {
   const config = isLiteracy
-    ? { min: 0, max: 100, labels: ["Very Low", "Low", "Moderate", "High", "Very High"] }
-    : { min: 1, max: 5, labels: ["Very Low", "Low", "Moderate", "High", "Very High"] };
+  ? { min: 0, max: 100, labels: ["Very Low", "Low", "Moderate", "High", "Very High"] }
+  : { min: 0, max: 100, labels: ["Very Low", "Low", "Moderate", "High", "Very High"] };
 
-  const pct = Math.max(0, Math.min(100, ((score - config.min) / (config.max - config.min)) * 100));
+  const pct = Math.max(0, Math.min(100, score));
 
   return (
     <div className="w-full my-2">
       {showScore && (
         <p className="text-3xl font-bold text-grima-primary text-center mb-3">
-          {score.toFixed(isLiteracy ? 0 : 1)}
-          <span className="text-2xl text-gray-400">/{isLiteracy ? 100 : 5}</span>
+          {score.toFixed(0)}
+          <span className="text-2xl text-gray-400">/100</span>
         </p>
       )}
       <div className="bg-gray-200 rounded-full h-2.5 relative">
@@ -1140,8 +1140,10 @@ function ScoreSummaryCard({ score, onViewResults }: { score: any; onViewResults:
       <div className="flex-grow flex flex-col items-center justify-center">
         <p className="text-gray-600 font-medium">Your Overall Score</p>
         <p className={`text-6xl font-bold text-grima-primary my-2 ${isLiteracy ? "leading-tight" : ""}`}>
-          {score.score_breakdown.overallScore.toFixed(isLiteracy ? 0 : 1)}
-          <span className="text-4xl text-gray-400">/{isLiteracy ? 100 : 5}</span>
+          {isLiteracy
+            ? score.score_breakdown.overallScore.toFixed(0)
+            : (score.score_breakdown.overallScore * 20).toFixed(0)}
+          <span className="text-4xl text-gray-400">/100</span>
         </p>
       </div>
 
@@ -1567,14 +1569,16 @@ function StressResultsDisplay({
         <h3 className="text-xl font-bold text-center mb-4 text-gray-800">Sources of Stress</h3>
         <div className="space-y-5">
           {stressSourceSections.map((sec) => {
-            const avg = (subScores[sec.id] ?? 0) / sec.questions.length;
+            const avg5 = (subScores[sec.id] ?? 0) / sec.questions.length; // 1..5
+            const avg100 = avg5 * 20;
+
             return (
               <div key={sec.id}>
                 <div className="flex justify-between items-baseline">
                   <span className="font-medium text-gray-700">{sec.title}</span>
-                  <strong className="font-bold text-gray-900">{avg.toFixed(1)}/5</strong>
+                  <strong className="font-bold text-gray-900">{avg100.toFixed(0)}/100</strong>
                 </div>
-                <ScoreScale score={avg} isLiteracy={false} />
+                <ScoreScale score={avg100} isLiteracy={false} />
               </div>
             );
           })}
@@ -1585,14 +1589,16 @@ function StressResultsDisplay({
         <h3 className="text-xl font-bold text-center mb-4 mt-8 text-gray-800">Impacts of Stress</h3>
         <div className="space-y-5">
           {stressImpactSections.map((sec) => {
-            const avg = (subScores[sec.id] ?? 0) / sec.questions.length;
+            const avg5 = (subScores[sec.id] ?? 0) / sec.questions.length; // 1..5
+            const avg100 = avg5 * 20;
+
             return (
               <div key={sec.id}>
                 <div className="flex justify-between items-baseline">
                   <span className="font-medium text-gray-700">{sec.title}</span>
-                  <strong className="font-bold text-gray-900">{avg.toFixed(1)}/5</strong>
+                  <strong className="font-bold text-gray-900">{avg100.toFixed(0)}/100</strong>
                 </div>
-                <ScoreScale score={avg} isLiteracy={false} />
+                <ScoreScale score={avg100} isLiteracy={false} />
               </div>
             );
           })}
@@ -1600,8 +1606,8 @@ function StressResultsDisplay({
       </div>
 
       <p className="text-sm text-center text-gray-500 mt-4">
-        Overall Sources Score: <strong>{sourcesScore.toFixed(1)}/5</strong> • Overall Impacts Score:{" "}
-        <strong>{impactsScore.toFixed(1)}/5</strong>
+        Overall Sources Score: <strong>{(sourcesScore * 20).toFixed(0)}/100</strong> • Overall Impacts Score:{" "}
+        <strong>{(impactsScore * 20).toFixed(0)}/100</strong>
       </p>
     </div>
   );
@@ -1676,7 +1682,10 @@ function ResultsStage({ results, onRestart, user }: { results: AssessmentResult 
   const { type, score_breakdown } = results;
   const isLiteracy = type === "literacy";
 
-  const overallScore = score_breakdown.overallScore;
+  const overallScore = isLiteracy
+  ? score_breakdown.overallScore
+  : score_breakdown.overallScore * 20;
+
 
   // Action plan / insights
   const insightDisplayOrder = useMemo(

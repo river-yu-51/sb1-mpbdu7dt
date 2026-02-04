@@ -24,13 +24,8 @@ const Footer = () => {
             <ul className="space-y-2">
               <li><Link to="/services" className="text-grima-200 hover:text-white transition-colors">Our Services</Link></li>
               <li><Link to="/booking" className="text-grima-200 hover:text-white transition-colors">Book Session</Link></li>
-              {/* Removed About Us link as per request */}
               <li><Link to="/assessments" className="text-grima-200 hover:text-white transition-colors">Assessments</Link></li>
-              <li>
-                <a href="#faq" className="text-grima-200 hover:text-white transition-colors">
-                  FAQ
-                </a>
-              </li>
+              <li><Link to="/faq" className="text-grima-200 hover:text-white transition-colors">FAQ</Link></li>
 
             </ul>
           </div>
@@ -50,8 +45,7 @@ const Footer = () => {
           </div>
         </div>
 
-        {/* FAQ Section */}
-        <div id="faq" className="mt-10">
+        {/* <div id="faq" className="mt-10">
           <div className="border-t border-grima-600 pt-8">
             <h3 className="text-lg font-semibold mb-4">FAQ</h3>
 
@@ -78,7 +72,7 @@ const Footer = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div> */}
 
         <div className="border-t border-grima-600 mt-8 pt-8 text-center">
           <p className="text-grima-200 text-sm">© {new Date().getFullYear()} Grima Financial. All rights reserved.</p>
