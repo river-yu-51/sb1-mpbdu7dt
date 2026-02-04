@@ -26,6 +26,8 @@ import AdminHomePage from "./pages/admin/AdminHomePage";
 import AdminServicesPage from "./pages/admin/AdminServicesPage";
 import AdminFaqsPage from "./pages/admin/AdminFaqsPage";
 import AdminAvailabilityPage from "./pages/admin/AdminAvailabilityPage";
+import AdminUsersPage from "./pages/admin/AdminUsersPage";
+import AdminUserDetailsPage from "./pages/admin/AdminUserDetailsPage";
 
 function App() {
   return (
@@ -57,6 +59,8 @@ function App() {
                 <Route path="availability" element={<AdminAvailabilityPage />} />
                 <Route path="services" element={<AdminServicesPage />} />
                 <Route path="faqs" element={<AdminFaqsPage />} />
+                <Route path="users" element={<AdminUsersPage />} />
+                <Route path="users/:id" element={<AdminUserDetailsPage />} />
               </Route>
             </Routes>
           </main>

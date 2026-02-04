@@ -19,10 +19,10 @@ export default function AdminLayout() {
         <aside className="bg-white border rounded-xl p-4 h-fit">
           <h2 className="font-bold text-lg">Admin</h2>
           <nav className="mt-3 space-y-1">
-            <NavLink to="/admin" end className={linkClass}>Overview</NavLink>
             <NavLink to="/admin/availability" className={linkClass}>Availability</NavLink>
             <NavLink to="/admin/services" className={linkClass}>Services</NavLink>
             <NavLink to="/admin/faqs" className={linkClass}>FAQs</NavLink>
+            <NavLink to="/admin/users" className={linkClass}>Users</NavLink>
             {/* add more links as you create pages */}
           </nav>
         </aside>

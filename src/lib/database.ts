@@ -218,6 +218,18 @@ export const db = {
     return (data ?? null) as any;
   },
 
+  async getUserById(userId: string): Promise<User | null> {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data ?? null) as any;
+  },
+
+
   async updateUser(userId: string, updateData: Partial<User>): Promise<User | null> {
     const { data, error } = await supabase
       .from("profiles")
